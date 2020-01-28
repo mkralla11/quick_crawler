@@ -1,3 +1,4 @@
+// #![type_length_limit="6954178"]
 use core::future::Future;
 use std::sync::{Arc, Mutex};
 use std::pin::Pin;
@@ -7,9 +8,9 @@ use futures::stream::{self, StreamExt, Iter as StreamIter};
 use futures::{ready, Stream};
 // use futures::channel::mpsc::channel;
 use async_std::sync::{channel, Receiver, Sender};
-use async_std::task::{Context, Poll};
+use async_std::task::{Context, Poll, sleep};
 
-use futures::future::join;
+use futures::future::{join};
 
 use std::time::Duration;
 
@@ -21,7 +22,6 @@ enum QuickScraperError {
 #[derive(Debug)]
 struct QuickScraper {
     start_urls: StreamIter<std::vec::IntoIter<String>>,
-    len: usize
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,7 +48,6 @@ impl QuickScraperBuilder {
         let data = self.start_urls.clone().ok_or(QuickScraperError::NoStartUrls)?.data;
         Ok(
             QuickScraper {
-                len: data.len(),
                 start_urls: stream::iter(data)
             }
         )
@@ -64,18 +63,40 @@ impl BuilderWithStartUrls for QuickScraperBuilder {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct DataFromScraper {
-    url: String,
-    count: usize
+enum DataFromScraperValue{
+    Complete,
+    DataFromScraper {
+        url: String,
+        count: usize
+    }
 }
+
+trait DataDistributorComplete{
+    fn is_complete_sentinal(&self) -> bool;
+}
+
+impl DataDistributorComplete for DataFromScraperValue {
+    fn is_complete_sentinal(&self) -> bool {
+        match self {
+            Self::Complete => true,
+            _ => false,
+        }
+    }
+}
+
+// #[derive(Debug, Clone, PartialEq)]
+// struct DataFromScraper {
+//     url: String,
+//     count: usize
+// }
 
 
 struct DataDistributor {
-    receiver: Receiver<DataFromScraper>
+    receiver: Receiver<DataFromScraperValue>
 }
 
 impl DataDistributor {
-    fn new(receiver: Receiver<DataFromScraper>) -> DataDistributor {
+    fn new(receiver: Receiver<DataFromScraperValue>) -> DataDistributor {
         DataDistributor {
             receiver
         }
@@ -85,7 +106,7 @@ impl DataDistributor {
 
 impl Stream for DataDistributor {
     /// The type of the value yielded by the stream.
-    type Item = DataFromScraper;
+    type Item = DataFromScraperValue;
 
     /// Attempt to resolve the next item in the stream.
     /// Retuns `Poll::Pending` if not ready, `Poll::Ready(Some(x))` if a value
@@ -97,19 +118,30 @@ impl Stream for DataDistributor {
             } = &mut *self;
 
             let empty = receiver.is_empty();
-            println!("here! {:?}", empty);
+            // println!("here! {:?}", empty);
             if empty {
                 // cx.waker().clone().wake();
                 return Poll::Pending;
             }
             else {
                 let mut unwrapped_fut = Box::pin(async move {
-                     receiver.recv().await.unwrap()
+                    receiver.recv().await.unwrap()
                 });
+                
 
                 let res = ready!(unwrapped_fut.as_mut().poll(cx));
-                println!("poll res: {:?}", res);
-                return Poll::Ready(Some(res));
+
+                match res.is_complete_sentinal() {
+                    true => {
+                        println!("poll NONE match (done): {:?}", res);
+                        return Poll::Ready(None); 
+                    }
+                    _ => {
+                        println!("poll some match: {:?}", res);
+                        return Poll::Ready(Some(res));
+                    }
+                }
+
                 // return Poll::Ready(Some(
                 //     DataFromScraper{
                 //         url: "test".into(),
@@ -124,41 +156,29 @@ impl Stream for DataDistributor {
 
 
 
-// async fn collect_results_for_receiver(receiver: Receiver<DataFromScraper>) -> () {
-//     // println!("starting collect");
-//     // async_std::task::spawn(async move {
-//     loop {
-//         println!("In receive loop");
-//         let res = match receiver.recv().await {
-//             Some(item) => {
-//                 Some(item)
-//             }
-//             None => {
-//                 println!("none! quiting loop");
-//                 // cont = false;
-//                 None
-//             }
-//         };
-//         println!("receive loop: {:?}", res);
-//     }
-//     //     }
-//     // });
-//     ()
-// }
-async fn dispatch(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<DataFromScraper>, url: String) -> (){
+
+async fn dispatch(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<DataFromScraperValue>, url: String) -> (){
     let mut count = count.lock().unwrap();
     *count += 1;
+    let val = *count;
+    std::mem::drop(count);
     println!("about to send");
-    // async_std::task::sleep(Duration::from_secs(1)).await;
+    
+    // if should_delay {
+    //     println!("delaying...");
+    //     sleep(Duration::from_secs(1)).await;
+    // }
+    
     println!("sending");
     let _res = data_to_manager_sender.send(
-        DataFromScraper{
+        DataFromScraperValue::DataFromScraper{
             url: url.clone(),
-            count: *count
+            count: val
         }
     ).await;
     // async_std::task::yield_now().await;
-    println!("in loop: {url} {count}", url=url, count=count);
+    println!("in loop: {url} {count}", url=url, count=val);
+
     // let res: Result<(), ()> = Ok(());
     // res
 }
@@ -168,24 +188,37 @@ impl QuickScraper {
         
         // let stream = &self.start_urls;
         let count = Arc::new(Mutex::new(0usize));
-        let (data_to_manager_sender, data_to_manager_receiver) = channel::<DataFromScraper>(4);
-        let len = self.len;
-        let stream_senders_fut = self.start_urls.enumerate().map(|(i, url)| (i, count.clone(), data_to_manager_sender.clone(), url.clone())).for_each(
-            move |(i, count, data_to_manager_sender, url)| {
-                // if i <= len {
-                dispatch(count, data_to_manager_sender, url)
-                // }
-                // else {
-                //     println!("done!");
-                // }
+        let (data_to_manager_sender, data_to_manager_receiver) = channel::<DataFromScraperValue>(5);
+
+
+        let stream_senders_fut: Pin<Box<dyn Future<Output=()>>> = Box::pin(self.start_urls.enumerate().map(|(i, url)| (i, count.clone(), data_to_manager_sender.clone(), url.clone())).for_each_concurrent(
+            3,
+            |(_i, count, data_to_manager_sender, url)| async move {
+                // let i = i + 1;
+                dispatch(count, data_to_manager_sender, url).await;
+                async_std::task::yield_now().await;
             }
-        );
+        ));
+
+
+
+
 
         // let collect_fut = collect_results_for_receiver(data_to_manager_receiver);
         let data_distributor_stream = DataDistributor::new(data_to_manager_receiver);
-        let data_distributor_stream_fut: Pin<Box<dyn Future<Output=Vec<DataFromScraper>>>>= Box::pin(data_distributor_stream.collect());
+        let data_distributor_stream_fut: Pin<Box<dyn Future<Output=Vec<DataFromScraperValue>>>>= Box::pin(data_distributor_stream.collect());
         // let res = data_to_manager_receiver.recv().await.ok_or("Error 3")?;
-        let res = join(data_distributor_stream_fut, stream_senders_fut).await;
+        let data_to_manager_sender2 = data_to_manager_sender.clone();
+        let stream_complete_fut = async move {
+            let res = stream_senders_fut.await;
+            let _res = data_to_manager_sender2.send(
+                DataFromScraperValue::Complete
+            ).await;
+            println!("finished sender stream {:?}", res);
+            res
+        };
+
+        let res = join(data_distributor_stream_fut, stream_complete_fut).await;
         println!("outside loop: {:?}", res);
         Ok(())
     }
