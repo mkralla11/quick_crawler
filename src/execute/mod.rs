@@ -32,8 +32,11 @@ pub async fn execute_deep_scrape(start_url: &StartUrl, data_sender: Sender<DataF
     };
 
     let req = match &start_url.method {
-        Some(m) if m == "GET" =>surf::get(url),
-        Some(m) if m == "POST" =>surf::post(url),
+        Some(m) if m == "GET" =>"STUB URL REQ GET".to_string(),
+        Some(m) if m == "POST" =>"STUB URL REQ POST".to_string(),
+        // // FOR LIVE RESULTS
+        // Some(m) if m == "GET" =>surf::get(url),
+        // Some(m) if m == "POST" =>surf::post(url),
         Some(m)=>{
             return Err(format!("The method '{m}' is not a valid http method", m=m));
         }
@@ -42,12 +45,25 @@ pub async fn execute_deep_scrape(start_url: &StartUrl, data_sender: Sender<DataF
         }
     };
 
+    // // FOR LIVE RESULTS
+    // let html_str = req.recv_string().await.map_err(|_| "Surf error".to_string())?;
+    // println!("{:?}", html_str);
 
-    let html_str = req.recv_string().await.map_err(|_| "Surf error".to_string())?;
-    // println!("body: {:?}", body);
 
-    // let document = Html::parse_fragment(&body);
 
+    let html_str = r#"
+        <div>
+            <a class="feed-item" href="https://tasty.co/compilation/another-meal-1">
+                link to another meal 1
+            </a>
+            <a class="feed-item" href="https://tasty.co/compilation/another-meal-2">
+                link to another meal 2
+            </a>
+            <a class="feed-item" href="https://tasty.co/compilation/another-meal-3">
+                link to another meal 3
+            </a>
+        </div>
+    "#.into();
 
 
     let response_logic = match &start_url.response_logic {
@@ -120,19 +136,16 @@ use futures::future::{BoxFuture, FutureExt};
 
 fn handle_scrape(executables: Vec<Box<Ops>>, html_str: String, data_sender: Sender<DataFromScraperValue>)-> BoxFuture<'static, Result<(), String>>{
     async move {
-    // let mut doc = document;
-        // let doc = Html::parse_fragment(&html_str);
+
         let mut container = HtmlContainer::new(html_str.clone(), Html::parse_fragment(&html_str));
 
         for (i, executable) in executables.iter().enumerate() {
-            // let mut container = html_container;
             println!("executable {:?}", i);
             match &**executable {
                 Pred(pred)=>{
                     println!("Pred!");
                     match container.doc_or_nodes {
                         DocOrNodes::Document=>{
-                            // container.doc = Html::parse_fragment(&container.html_str);
                             let nodes = container.doc.select(&pred).collect();
                             replace(&mut container.nodes, nodes);
 
@@ -148,9 +161,6 @@ fn handle_scrape(executables: Vec<Box<Ops>>, html_str: String, data_sender: Send
                         }
 
                     }
-                    // document.find(Class("blah")).collect();
-                    
-                    // handle_scrape(, document.find(pred), sender).await;
                 }
                 Text=>{
                     println!("no more text op");
@@ -161,23 +171,21 @@ fn handle_scrape(executables: Vec<Box<Ops>>, html_str: String, data_sender: Send
                 Ops::ResponseLogic(response_logic)=>{
 
                     println!("ResponseLogic!");
-                    // let next_docs = replace(&mut container.next_docs, vec![]);
-                    // html_container = None;
-                    // std::mem::drop(container);
-                    // handle_next_docs(next_docs, *response_logic, data_sender).await;
+
                     use futures::stream::{self, StreamExt};
-                    // let next_htmls = vec!["<h1>Hello, <i>world!</i></h1>".into()];
                     
                     let hrefs = container.nodes.iter().map(|node| node.value().attr("href")).filter(|href| href.is_some()).map(|href| href.unwrap().to_owned());
                     
 
-
+                    // Can't figure out how to remove this block on because 
+                    // of Scraper crate dependency that uses Cells :(
                     task::block_on(async {
                         let (sender, receiver) = channel::<DataFromScraperValue>(5);
                         let stream_senders_fut: Pin<Box<dyn Future<Output=()>>> = Box::pin(stream::iter(hrefs).enumerate().map(|(i,href)| (i, href, sender.clone())).for_each_concurrent(
                             /* limit */ 5,
                             |(i, href, snd)| async move {
                                 println!("{:?}", href);
+                                // // FOR LIVE RESULTS
                                 // let html_str = surf::get(href).recv_string().await.map_err(|_| "Surf error".to_string()).expect("should work");
                                 let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i);
                                 let _res = snd.send(
@@ -232,7 +240,8 @@ fn handle_scrape(executables: Vec<Box<Ops>>, html_str: String, data_sender: Send
                 Store=>{
                     println!("Store!");
                     for node in container.nodes.iter(){
-                
+                        // Can't figure out how to remove this block on because 
+                        // of Scraper crate dependency that uses Cells :(
                         task::block_on(async {
                             let res = node.text().collect::<Vec<_>>().concat();
                             println!("storing! {:?}", res);

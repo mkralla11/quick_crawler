@@ -192,7 +192,7 @@ async fn dispatch(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<DataF
 }
 
 impl<'a> QuickScraper<'a> {
-    async fn process(self) -> Result<(), String> {
+    async fn process(self) -> Result<Vec<DataFromScraperValue>, String> {
         
         // let stream = &self.start_urls;
         let count = Arc::new(Mutex::new(0usize));
@@ -226,9 +226,9 @@ impl<'a> QuickScraper<'a> {
             res
         };
 
-        let res = join(data_distributor_stream_fut, stream_complete_fut).await;
-        println!("outside loop: {:?}", res);
-        Ok(())
+        let (data, _) = join(data_distributor_stream_fut, stream_complete_fut).await;
+        // println!("outside loop: {:?}", data);
+        Ok(data)
     }
     // fn add_url(&mut self, url: String) -> &Self {
     //     let new_stream = stream::iter(vec![url]);
