@@ -2,7 +2,15 @@
 use core::future::Future;
 use std::sync::{Arc, Mutex};
 use std::pin::Pin;
+mod execute;
+use crate::execute::execute_deep_scrape;
 
+#[macro_use]
+extern crate debug_stub_derive;
+
+
+mod scrape;
+use crate::scrape::{ResponseLogic::Parallel, StartUrl, Scrape};
 
 use futures::stream::{self, StreamExt, Iter as StreamIter};
 use futures::{ready, Stream};
@@ -14,19 +22,19 @@ use futures::future::{join};
 
 use std::time::Duration;
 
-#[derive(Debug, PartialEq)]
+// #[derive(Debug, PartialEq)]
 enum QuickScraperError {
     NoStartUrls
 }
 
-#[derive(Debug)]
-struct QuickScraper {
-    start_urls: StreamIter<std::vec::IntoIter<String>>,
+// #[derive(Debug)]
+struct QuickScraper<'a> {
+    start_urls: StreamIter<std::slice::Iter<'a, StartUrl>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+// #[derive(Debug)]
 struct StartUrls {
-    data: Vec<String>
+    data: Vec<StartUrl>
 }
 
 struct QuickScraperBuilder {
@@ -45,7 +53,7 @@ impl QuickScraperBuilder {
         }
     }
     fn finish(&self) -> Result<QuickScraper, QuickScraperError> {
-        let data = self.start_urls.clone().ok_or(QuickScraperError::NoStartUrls)?.data;
+        let data = &self.start_urls.as_ref().ok_or(QuickScraperError::NoStartUrls)?.data;
         Ok(
             QuickScraper {
                 start_urls: stream::iter(data)
@@ -62,12 +70,11 @@ impl BuilderWithStartUrls for QuickScraperBuilder {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum DataFromScraperValue{
+#[derive(Debug)]
+pub enum DataFromScraperValue{
     Complete,
     DataFromScraper {
-        url: String,
-        count: usize
+        text: String
     }
 }
 
@@ -91,7 +98,7 @@ impl DataDistributorComplete for DataFromScraperValue {
 // }
 
 
-struct DataDistributor {
+pub struct DataDistributor {
     receiver: Receiver<DataFromScraperValue>
 }
 
@@ -133,11 +140,11 @@ impl Stream for DataDistributor {
 
                 match res.is_complete_sentinal() {
                     true => {
-                        println!("poll NONE match (done): {:?}", res);
+                        // println!("poll NONE match (done): {:?}", res);
                         return Poll::Ready(None); 
                     }
                     _ => {
-                        println!("poll some match: {:?}", res);
+                        // println!("poll some match: {:?}", res);
                         return Poll::Ready(Some(res));
                     }
                 }
@@ -157,7 +164,7 @@ impl Stream for DataDistributor {
 
 
 
-async fn dispatch(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<DataFromScraperValue>, url: String) -> (){
+async fn dispatch(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<DataFromScraperValue>, start_url: &StartUrl) -> (){
     let mut count = count.lock().unwrap();
     *count += 1;
     let val = *count;
@@ -170,32 +177,33 @@ async fn dispatch(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<DataF
     // }
     
     println!("sending");
-    let _res = data_to_manager_sender.send(
-        DataFromScraperValue::DataFromScraper{
-            url: url.clone(),
-            count: val
-        }
-    ).await;
+    // let _res = data_to_manager_sender.send(
+    //     DataFromScraperValue::DataFromScraper{
+    //         url: start_url.url.clone().unwrap(),
+    //         count: val
+    //     }
+    // ).await;
+    let res = execute_deep_scrape(&start_url, data_to_manager_sender).await;
     // async_std::task::yield_now().await;
-    println!("in loop: {url} {count}", url=url, count=val);
+    println!("in loop: {:?} {:?} {:?}", start_url.url, val, res);
 
     // let res: Result<(), ()> = Ok(());
     // res
 }
 
-impl QuickScraper {
+impl<'a> QuickScraper<'a> {
     async fn process(self) -> Result<(), String> {
         
         // let stream = &self.start_urls;
         let count = Arc::new(Mutex::new(0usize));
-        let (data_to_manager_sender, data_to_manager_receiver) = channel::<DataFromScraperValue>(5);
+        let (data_to_manager_sender, data_to_manager_receiver) = channel::<DataFromScraperValue>(100);
 
 
-        let stream_senders_fut: Pin<Box<dyn Future<Output=()>>> = Box::pin(self.start_urls.enumerate().map(|(i, url)| (i, count.clone(), data_to_manager_sender.clone(), url.clone())).for_each_concurrent(
+        let stream_senders_fut: Pin<Box<dyn Future<Output=()>>> = Box::pin(self.start_urls.enumerate().map(|(i, url)| (i, count.clone(), data_to_manager_sender.clone(), url)).for_each_concurrent(
             3,
-            |(_i, count, data_to_manager_sender, url)| async move {
+            |(_i, count, data_to_manager_sender, start_url)| async move {
                 // let i = i + 1;
-                dispatch(count, data_to_manager_sender, url).await;
+                dispatch(count, data_to_manager_sender, start_url).await;
                 async_std::task::yield_now().await;
             }
         ));
@@ -214,7 +222,7 @@ impl QuickScraper {
             let _res = data_to_manager_sender2.send(
                 DataFromScraperValue::Complete
             ).await;
-            println!("finished sender stream {:?}", res);
+            // println!("finished sender stream {:?}", res);
             res
         };
 
@@ -239,39 +247,65 @@ mod tests {
     use async_std::{task};
 
 
-    #[test]
-    fn with_start_urls() {
-        let mut builder = QuickScraperBuilder::new();
+    // #[test]
+    // fn with_start_urls() {
+    //     let mut builder = QuickScraperBuilder::new();
 
 
 
-        builder.with(
-            StartUrls{
-                data: vec!["https://www.google.com".into()] 
-            }
-        );
-        // assert_eq!(builder.start_urls.as_ref().unwrap(), &start_urls_1);
-    }
+    //     builder.with(
+    //         StartUrls{
+    //             data: vec!["https://www.google.com".into()] 
+    //         }
+    //     );
+    //     // assert_eq!(builder.start_urls.as_ref().unwrap(), &start_urls_1);
+    // }
 
     #[test]
     fn with_start_urls_finished() -> () {
         let mut builder = QuickScraperBuilder::new();
+
+
+
         let start_urls = StartUrls{
             data: vec![
-                "https://www.test-1.com".into(),
-                "https://www.test-2.com".into(),
-                "https://www.test-3.com".into(),
-                "https://www.test-4.com".into(),
-                "https://www.test-5.com".into(),
-                "https://www.test-6.com".into(),
-                "https://www.test-7.com".into(),
-                "https://www.test-8.com".into(),
-                "https://www.test-9.com".into(),
-                "https://www.test-10.com".into(),
-                "https://www.test-11.com".into(),
-                "https://www.test-12.com".into(),
-                "https://www.test-13.com".into(),
-                "https://www.test-14.com".into(),
+                StartUrl::new()
+                    .url("https://tasty.co/search?q=dinner".into())
+                    .method("GET".into())
+                    .response_logic(Parallel(vec![
+                        // will be provided an html page
+                        Scrape::new()
+                            .find(".feed-item".into())
+                            .response_logic(Parallel(vec![
+                                Scrape::new()
+                                    .find(".ingredients-prep".into())
+                                    .find(".ingredient".into())
+                                    .store(),
+                                Scrape::new()
+                                    .find(".ingredients-prep".into())
+                                    .find(".prep-steps".into())
+                                    .find("li".into())
+                                    .store()
+                            ]))
+                            
+                    ])
+                )
+
+                
+                // "https://www.test-1.com".into(),
+                // "https://www.test-2.com".into(),
+                // "https://www.test-3.com".into(),
+                // "https://www.test-4.com".into(),
+                // "https://www.test-5.com".into(),
+                // "https://www.test-6.com".into(),
+                // "https://www.test-7.com".into(),
+                // "https://www.test-8.com".into(),
+                // "https://www.test-9.com".into(),
+                // "https://www.test-10.com".into(),
+                // "https://www.test-11.com".into(),
+                // "https://www.test-12.com".into(),
+                // "https://www.test-13.com".into(),
+                // "https://www.test-14.com".into(),
             ] 
         };
 
@@ -279,7 +313,7 @@ mod tests {
         builder.with(
             start_urls
         );
-        let scraper = builder.finish().expect("Builder could not finish");
+        let scraper = builder.finish().map_err(|_| "Builder could not finish").expect("no error");
         let res = task::block_on(async {
             println!("\n");
             let fut = scraper.process();
