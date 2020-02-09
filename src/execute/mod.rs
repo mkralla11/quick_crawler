@@ -11,6 +11,11 @@ use futures::future::{join};
 
 
 
+
+
+
+
+
 use async_std::{task};
 extern crate scraper;
 use scraper::{Html};
@@ -104,20 +109,19 @@ enum DocOrNodes {
     Document,
     Nodes
 }
-struct HtmlContainer<'a> {
-    doc: scraper::Html,
+struct HtmlContainer {
     html_str: String,
-    nodes: Vec<scraper::ElementRef<'a>>,
-    // next_htmls: Vec<String>,
+    node_strs: Vec<String>,
+    node_hrefs: Vec<String>,
     doc_or_nodes: DocOrNodes
 }
 
-impl<'a> HtmlContainer<'a>{
-    fn new(html_str: String, doc: scraper::Html)-> HtmlContainer<'a> {
+impl HtmlContainer{
+    fn new(html_str: String)-> HtmlContainer {
         HtmlContainer{
             html_str,
-            doc,
-            nodes: vec![],
+            node_strs: vec![],
+            node_hrefs: vec![],
             // next_: vec![],
             doc_or_nodes: DocOrNodes::Document
         }
@@ -137,7 +141,7 @@ use futures::future::{BoxFuture, FutureExt};
 fn handle_scrape(executables: Vec<Box<Ops>>, html_str: String, data_sender: Sender<DataFromScraperValue>)-> BoxFuture<'static, Result<(), String>>{
     async move {
 
-        let mut container = HtmlContainer::new(html_str.clone(), Html::parse_fragment(&html_str));
+        let mut container = HtmlContainer::new(html_str.clone());
 
         for (i, executable) in executables.iter().enumerate() {
             println!("executable {:?}", i);
@@ -146,17 +150,35 @@ fn handle_scrape(executables: Vec<Box<Ops>>, html_str: String, data_sender: Send
                     println!("Pred!");
                     match container.doc_or_nodes {
                         DocOrNodes::Document=>{
-                            let nodes = container.doc.select(&pred).collect();
-                            replace(&mut container.nodes, nodes);
+                            let node_strs = replace(&mut container.node_strs, vec![]);
+                            container.node_hrefs = vec![];
+                            Html::parse_fragment(&container.html_str).select(&pred).for_each(|node| {
+                                
+                                container.node_strs.push(node.html().to_owned());
+                                let href = node.value().attr("href");
+                                if href.is_some() {
+                                    container.node_hrefs.push(href.unwrap().to_owned());
+                                }
+                            });
 
-                            println!("found doc!");
 
                             container.doc_or_nodes = DocOrNodes::Nodes;
                         } 
                         DocOrNodes::Nodes=>{
-                            container.nodes = container.nodes.iter().flat_map(|item| item.select(&pred)).collect::<Vec<_>>();
+                            let node_strs = replace(&mut container.node_strs, vec![]);
+                            container.node_hrefs = vec![];
+                            node_strs.into_iter().for_each(|item| {
+                                let doc = Html::parse_fragment(&item);
+                                doc.select(&pred).for_each(|node| {
+                                    
+                                    container.node_strs.push(node.html().to_owned());
+                                    let href = node.value().attr("href");
+                                    if href.is_some() {
+                                        container.node_hrefs.push(href.unwrap().to_owned());
+                                    }
+                                });
 
-                            
+                            });
                             container.doc_or_nodes = DocOrNodes::Nodes;
                         }
 
@@ -174,83 +196,79 @@ fn handle_scrape(executables: Vec<Box<Ops>>, html_str: String, data_sender: Send
 
                     use futures::stream::{self, StreamExt};
                     
-                    let hrefs = container.nodes.iter().map(|node| node.value().attr("href")).filter(|href| href.is_some()).map(|href| href.unwrap().to_owned());
+                    // let hrefs = container.node_hrefs;
                     
 
                     // Can't figure out how to remove this block on because 
                     // of Scraper crate dependency that uses Cells :(
-                    task::block_on(async {
-                        let (sender, receiver) = channel::<DataFromScraperValue>(5);
-                        let stream_senders_fut: Pin<Box<dyn Future<Output=()>>> = Box::pin(stream::iter(hrefs).enumerate().map(|(i,href)| (i, href, sender.clone())).for_each_concurrent(
-                            /* limit */ 5,
-                            |(i, href, snd)| async move {
-                                println!("{:?}", href);
-                                // // FOR LIVE RESULTS
-                                // let html_str = surf::get(href).recv_string().await.map_err(|_| "Surf error".to_string()).expect("should work");
-                                let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i);
-                                let _res = snd.send(
-                                    DataFromScraperValue::DataFromScraper{
-                                        text: html_str
-                                    }
-                                ).await;
+                    println!("{:?}", container.node_hrefs);
+                    // let (sender, receiver) = channel::<DataFromScraperValue>(5);
+                    Box::pin(stream::iter(&container.node_hrefs).enumerate().map(|(i,href)| (i, href, data_sender.clone(), response_logic.clone())).for_each_concurrent(
+                        /* limit */ 5,
+                        |(i, href, data_sender, response_logic)| async move {
+                            println!("here {:?}", href);
+                            // // FOR LIVE RESULTS
+                            // let html_str = surf::get(href).recv_string().await.map_err(|_| "Surf error".to_string()).expect("should work");
+                            let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i);
+                            
+                            handle_response_logic(response_logic, html_str, data_sender).await;
 
-                                async_std::task::yield_now().await;
-                            }
-                        ));
+                            // async_std::task::yield_now().await;
+                        }
+                    )).await;
 
 
-                        let data_distributor_stream = DataDistributor::new(receiver);
-                        let data_distributor_stream_fut: Pin<Box<dyn Future<Output=Vec<DataFromScraperValue>>>>= Box::pin(data_distributor_stream.collect());
-                        let data_to_manager_sender2 = sender.clone();
-                        let stream_complete_fut = async move {
-                            let res = stream_senders_fut.await;
-                            let _res = data_to_manager_sender2.send(
-                                DataFromScraperValue::Complete
-                            ).await;
-                            // println!("finished sender stream {:?}", res);
-                            res
-                        };
+                    // let data_distributor_stream = DataDistributor::new(receiver);
+                    // let data_distributor_stream_fut: Pin<Box<dyn Future<Output=Vec<DataFromScraperValue>> + Send>>= Box::pin(data_distributor_stream.collect());
+                    // let data_to_manager_sender2 = sender.clone();
+                    // let stream_complete_fut = async move {
+                    //     let res = stream_senders_fut.await;
+                    //     let _res = data_to_manager_sender2.send(
+                    //         DataFromScraperValue::Complete
+                    //     ).await;
+                    //     println!("finished sender stream {:?}", res);
+                    //     res
+                    // };
 
 
+                    // println!("awaiting");
+                    // let (_, res) = join(stream_complete_fut, data_distributor_stream_fut).await;
+                    // let html_strs: Vec<String> = res.iter().map(|data_scraper_value| {
+                    //     match data_scraper_value {
+                    //         DataFromScraperValue::DataFromScraper{text}=>{
+                    //             text.clone()
+                    //         }
+                    //         _ => "".to_string()
+                    //     }
+                    // }).collect();
+                    
 
-                        let (res, _) = join(data_distributor_stream_fut, stream_complete_fut).await;
+                    // stream::iter(html_strs).map(|html_str: String| (html_str, data_sender.clone(), response_logic.clone())).for_each_concurrent(
+                    //     /* limit */ 4,
+                    //     |(html_str, data_sender, response_logic)| async {
+                    //         // idea().await;
+                    //         handle_response_logic(response_logic, html_str, data_sender).await;
+                    //     }
+                    // ).await;   
 
-                        let html_strs: Vec<String> = res.iter().map(|data_scraper_value| {
-                            match data_scraper_value {
-                                DataFromScraperValue::DataFromScraper{text}=>{
-                                    text.clone()
-                                }
-                                _ => "".to_string()
-                            }
-                        }).collect();
-                        
-
-                        stream::iter(html_strs).map(|html_str: String| (html_str, data_sender.clone(), response_logic.clone())).for_each_concurrent(
-                            /* limit */ 4,
-                            |(html_str, data_sender, response_logic)| async {
-                                // idea().await;
-                                handle_response_logic(response_logic, html_str, data_sender).await;
-                            }
-                        ).await;   
-
-
-
-                    });
                 }
                 Store=>{
                     println!("Store!");
-                    for node in container.nodes.iter(){
+                    for node in container.node_strs.iter(){
                         // Can't figure out how to remove this block on because 
                         // of Scraper crate dependency that uses Cells :(
-                        task::block_on(async {
-                            let res = node.text().collect::<Vec<_>>().concat();
-                            println!("storing! {:?}", res);
-                            data_sender.send(
-                                DataFromScraperValue::DataFromScraper{
-                                    text: res
-                                }
-                            ).await;
-                        });
+                        // let res = node.text().collect::<Vec<_>>().concat();
+                        // let res = container.node_strs.into_iter().flat_map(|item| Html::parse_fragment(&item).root_element().text()).collect::<Vec<_>>().concat();
+                        
+                        let text = Html::parse_fragment(&node).root_element().text().collect::<Vec<_>>().concat();
+                        println!("storing! {:?}", text);
+
+                        data_sender.send(
+                            DataFromScraperValue::DataFromScraper{
+                                text
+                            }
+                        ).await;
+
                         
                     }
                 }

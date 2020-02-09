@@ -24,12 +24,12 @@ impl<'a> StartUrl {
             response_logic: None
         }
     }
-    pub fn url(mut self, url: String) -> Self {
-        self.url = Some(url);
+    pub fn url<S: Into<String>>(mut self, url: S) -> Self {
+        self.url = Some(url.into());
         self
     }
-    pub fn method(mut self, method: String) -> Self {
-        self.method = Some(method);
+    pub fn method<S: Into<String>>(mut self, method: S) -> Self {
+        self.method = Some(method.into());
         self
     }
     pub fn response_logic(mut self, response_logic: ResponseLogic) -> Self {
@@ -72,8 +72,8 @@ impl Scrape {
             executables: vec![]
         }
     }
-    pub fn find(mut self, predicate: String) -> Self {
-        self.executables.push(Box::new(Ops::Pred(Selector::parse(&predicate).unwrap())));
+    pub fn find<S: Into<String>>(mut self, predicate: S) -> Self {
+        self.executables.push(Box::new(Ops::Pred(Selector::parse(&predicate.into()).unwrap())));
         self
     }
     pub fn text(mut self) -> Self {

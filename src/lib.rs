@@ -270,21 +270,18 @@ mod tests {
         let start_urls = StartUrls{
             data: vec![
                 StartUrl::new()
-                    .url("https://tasty.co/search?q=dinner".into())
-                    .method("GET".into())
+                    .url("https://tasty.co/search?q=dinner")
+                    .method("GET")
                     .response_logic(Parallel(vec![
                         // will be provided an html page
                         Scrape::new()
-                            .find(".feed-item".into())
+                            .find(".feed-item")
                             .response_logic(Parallel(vec![
                                 Scrape::new()
-                                    .find(".ingredients-prep".into())
-                                    .find(".ingredient".into())
+                                    .find(".ingredients-prep .ingredient")
                                     .store(),
                                 Scrape::new()
-                                    .find(".ingredients-prep".into())
-                                    .find(".prep-steps".into())
-                                    .find("li".into())
+                                    .find(".ingredients-prep .prep-steps li")
                                     .store()
                             ]))
                             
