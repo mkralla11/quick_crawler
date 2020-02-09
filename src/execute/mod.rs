@@ -67,6 +67,11 @@ pub async fn execute_deep_scrape(start_url: &StartUrl, data_sender: Sender<DataF
             <a class="feed-item" href="https://tasty.co/compilation/another-meal-3">
                 link to another meal 3
             </a>
+            <div>
+                <a class="other-feed-item" href="https://tasty.co/compilation/other-another-meal-1">
+                    other link to another meal 1
+                </a>
+            </div>
         </div>
     "#.into();
 

@@ -283,8 +283,17 @@ mod tests {
                                 Scrape::new()
                                     .find(".ingredients-prep .prep-steps li")
                                     .store()
-                            ]))
-                            
+                            ])),
+                        Scrape::new()
+                            .find(".other-feed-item")
+                            .response_logic(Parallel(vec![
+                                Scrape::new()
+                                    .find(".ingredients-prep .ingredient")
+                                    .store(),
+                                Scrape::new()
+                                    .find(".ingredients-prep .prep-steps li")
+                                    .store()
+                            ]))  
                     ])
                 )
                 // more StartUrl::new 's 
