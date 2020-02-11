@@ -325,7 +325,7 @@ mod tests {
                                     }),
                                 Scrape::new()
                                     .find(".ingredients-prep .prep-steps li")
-                                    .store(|vec| async {
+                                    .store(|vec: Vec<String>| async {
                                         
                                     })
                             ])),
@@ -334,12 +334,12 @@ mod tests {
                             .response_logic(Parallel(vec![
                                 Scrape::new()
                                     .find(".ingredients-prep .ingredient")
-                                    .store(|vec| async {
+                                    .store(|vec: Vec<String>| async {
                                         
                                     }),
                                 Scrape::new()
                                     .find(".ingredients-prep .prep-steps li")
-                                    .store(|vec| async {
+                                    .store(|vec: Vec<String>| async {
                                         
                                     })
                             ]))  
