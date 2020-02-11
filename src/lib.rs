@@ -28,51 +28,36 @@ enum QuickScraperError {
 }
 
 // #[derive(Debug)]
-struct QuickScraper<'a, C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future
+struct QuickScraper<'a>
 {
-    start_urls: StreamIter<std::slice::Iter<'a, StartUrl<C, F>>>,
+    start_urls: StreamIter<std::slice::Iter<'a, StartUrl>>,
 }
 
 // #[derive(Debug)]
-struct StartUrls<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future
+struct StartUrls
 {
-    data: Vec<StartUrl<C, F>>
+    data: Vec<StartUrl>
 }
 
-struct QuickScraperBuilder<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future
+struct QuickScraperBuilder
 {
-    start_urls: Option<StartUrls<C, F>>
+    start_urls: Option<StartUrls>
 }
 
-trait BuilderWithStartUrls<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future
+trait BuilderWithStartUrls
 {
-    fn with(self: &mut Self, start_urls: StartUrls<C, F>) -> &QuickScraperBuilder<C, F>;
+    fn with(self: &mut Self, start_urls: StartUrls) -> &QuickScraperBuilder;
 }
 
 
-impl<C, F> QuickScraperBuilder<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future
+impl QuickScraperBuilder
 {
-    fn new() -> QuickScraperBuilder<C, F> {
+    fn new() -> QuickScraperBuilder{
         QuickScraperBuilder {
             start_urls: None
         }
     }
-    fn finish(&self) -> Result<QuickScraper<C, F>, QuickScraperError> {
+    fn finish(&self) -> Result<QuickScraper, QuickScraperError> {
         let data = &self.start_urls.as_ref().ok_or(QuickScraperError::NoStartUrls)?.data;
         Ok(
             QuickScraper {
@@ -83,12 +68,9 @@ where
 }
 
 
-impl<C, F> BuilderWithStartUrls<C, F> for QuickScraperBuilder<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future
+impl BuilderWithStartUrls for QuickScraperBuilder
 {
-    fn with(&mut self, start_urls: StartUrls<C, F>) -> &QuickScraperBuilder<C, F> {
+    fn with(&mut self, start_urls: StartUrls) -> &QuickScraperBuilder {
         self.start_urls = Some(start_urls);
         self
     }
@@ -188,12 +170,7 @@ impl Stream for DataDistributor {
 
 
 
-async fn dispatch<'a, C: 'a, F: 'a>(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<DataFromScraperValue>, start_url: &'a StartUrl<C, F>) -> ()
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future<Output=()>, 
-    C: std::marker::Send, 
-    C: std::marker::Sync
+async fn dispatch<'a>(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<DataFromScraperValue>, start_url: &'a StartUrl) -> ()
 {
     let mut count = count.lock().unwrap();
     *count += 1;
@@ -221,12 +198,7 @@ where
     // res
 }
 
-impl<'a, C: 'a, F: 'a> QuickScraper<'a, C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future<Output=()>, 
-    C: std::marker::Send, 
-    C: std::marker::Sync
+impl<'a> QuickScraper<'a>
 {
     async fn process(self) -> Result<Vec<DataFromScraperValue>, String> {
         
@@ -297,9 +269,6 @@ mod tests {
     //     // assert_eq!(builder.start_urls.as_ref().unwrap(), &start_urls_1);
     // }
 
-        async fn f(vec: Vec<String>) -> () {
-
-        }
 
 
     #[test]

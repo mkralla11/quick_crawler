@@ -28,12 +28,7 @@ use crate::{DataFromScraperValue, DataDistributor};
 
 
 
-pub async fn execute_deep_scrape<'a, C: 'a, F: 'a>(start_url: &StartUrl<C, F>, data_sender: Sender<DataFromScraperValue>)-> Result<(), String>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future<Output=()>, 
-    C: std::marker::Send, 
-    C: std::marker::Sync
+pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<DataFromScraperValue>)-> Result<(), String>
 {
     let url = match &start_url.url {
         Some(url)=>url,
@@ -89,7 +84,7 @@ where
         }
     };
 
-    handle_response_logic(response_logic, html_str, data_sender).await;
+    handle_response_logic(&response_logic, html_str, data_sender).await;
 
     Ok(())
 }
@@ -97,12 +92,8 @@ where
 
 
 
-async fn handle_response_logic<'a, C: 'a, F: 'a>(response_logic: &'a ResponseLogic<C, F>, html_str: String, data_sender: Sender<DataFromScraperValue>) -> Result<(), String>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future, 
-    C: std::marker::Send, 
-    C: std::marker::Sync
+async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, html_str: String, data_sender: Sender<DataFromScraperValue>) -> Result<(), String>
+
 {
     match response_logic {
         Parallel(par_items) => {
@@ -155,14 +146,9 @@ use futures::future::{BoxFuture, FutureExt};
 
 
 
-fn handle_scrape<'a, C: 'a, F: 'a>(executables: &'a Vec<Box<Ops<C, F>>>, html_str: String, data_sender: Sender<DataFromScraperValue>)-> BoxFuture<'a, Result<(), String>>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future, 
-    C: std::marker::Send, 
-    C: std::marker::Sync
+fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_sender: Sender<DataFromScraperValue>)-> BoxFuture<'a, Result<(), String>>
 {
-    async move {
+    Box::pin(async move {
 
         let mut container = HtmlContainer::new(html_str.clone());
 
@@ -228,7 +214,7 @@ where
                             // let html_str = surf::get(href).recv_string().await.map_err(|_| "Surf error".to_string()).expect("should work");
                             let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i);
                             
-                            handle_response_logic(response_logic, html_str, data_sender).await;
+                            handle_response_logic(&response_logic, html_str, data_sender).await;
 
                             // async_std::task::yield_now().await;
                         }
@@ -261,7 +247,7 @@ where
 
         }
         Ok(())
-    }.boxed()
+    })
 }
 
 

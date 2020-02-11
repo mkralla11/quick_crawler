@@ -4,36 +4,29 @@ use scraper::{Selector};
 // use futures::future::FutureExt;
 // use futures::future::Shared;
 use std::future::Future;
+use std::pin::Pin;
+
 // use pin_utils::{unsafe_pinned, unsafe_unpinned};
 
 #[derive(Clone)]
-pub enum ResponseLogic<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future
+pub enum ResponseLogic
 {
-    Parallel(Vec<Scrape<C, F>>),
-    Serial(Vec<Scrape<C, F>>)
+    Parallel(Vec<Scrape>),
+    Serial(Vec<Scrape>)
 }
 
 // #[derive(Debug)]
-pub struct StartUrl<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future
+pub struct StartUrl
 {
     pub url: Option<String>,
     pub method: Option<String>,
-    pub response_logic: Option<ResponseLogic<C, F>>
+    pub response_logic: Option<ResponseLogic>
 }
 
 
-impl<C, F> StartUrl<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future
+impl StartUrl
 {
-    pub fn new() -> StartUrl<C, F> {
+    pub fn new() -> StartUrl{
         StartUrl {
             url: None,
             method: None,
@@ -48,7 +41,7 @@ where
         self.method = Some(method.into());
         self
     }
-    pub fn response_logic(mut self, response_logic: ResponseLogic<C, F>) -> Self {
+    pub fn response_logic(mut self, response_logic: ResponseLogic) -> Self {
         self.response_logic = Some(response_logic);
         self
     }
@@ -58,12 +51,9 @@ where
 }
 
 #[derive(Clone)]
-pub struct Scrape<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future 
+pub struct Scrape
 {
-    pub executables: Vec<Box<Ops<C, F>>>,
+    pub executables: Vec<Box<Ops>>,
     // text: Text
 }
 
@@ -76,14 +66,11 @@ where
 
 
 #[derive(Clone)]
-pub enum Ops<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future
+pub enum Ops
 {
     Pred(Selector),
-    ResponseLogic(ResponseLogic<C, F>),
-    Store(C)
+    ResponseLogic(ResponseLogic),
+    Store(Box<dyn Fn(Vec<String>) -> Pin<Box<dyn Future<Output = ()>>>>)
 }
 
 
@@ -95,14 +82,11 @@ where
 // }
 
 
-impl<C, F> Scrape<C, F>
-where
-    C: Fn(Vec<String>) -> F,
-    F: Future<Output = ()>
+impl Scrape
 {
     // unsafe_unpinned!(executables: C);
 
-    pub fn new() -> Scrape<C, F> {
+    pub fn new() -> Scrape {
         Scrape {
             executables: vec![]
         }
@@ -111,14 +95,14 @@ where
         self.executables.push(Box::new(Ops::Pred(Selector::parse(&predicate.into()).unwrap())));
         self
     }
-    pub fn response_logic(mut self, resp_logic: ResponseLogic<C, F>) -> Self {
+    pub fn response_logic(mut self, resp_logic: ResponseLogic) -> Self {
         self.executables.push(Box::new(Ops::ResponseLogic(resp_logic)));
         self
     }
 
     pub fn store(
         mut self, 
-        c: C
+        c: dyn Fn(Vec<String>) -> Pin<Box<dyn Future<Output = ()> + Send>>
     ) -> Self
     {
         self.executables.push(Box::new(Ops::Store(c)));
