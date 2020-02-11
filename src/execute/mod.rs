@@ -2,7 +2,7 @@
 use std::mem::replace;
 
 
-use core::future::Future;
+use std::future::Future;
 
 use std::pin::Pin;
 
@@ -22,13 +22,19 @@ use scraper::{Html};
 use async_std::sync::{channel, Sender};
 
 
-use crate::scrape::{StartUrl, ResponseLogic::{self, Parallel}, Ops::{self, Pred, Text, NavToEach, Store}};
+use crate::scrape::{StartUrl, ResponseLogic::{self, Parallel}, Ops::{self, Pred, Store}};
 use crate::{DataFromScraperValue, DataDistributor};
 
 
 
 
-pub async fn execute_deep_scrape(start_url: &StartUrl, data_sender: Sender<DataFromScraperValue>)-> Result<(), String>{
+pub async fn execute_deep_scrape<'a, C: 'a, F: 'a>(start_url: &StartUrl<C, F>, data_sender: Sender<DataFromScraperValue>)-> Result<(), String>
+where
+    C: Fn(Vec<String>) -> F,
+    F: Future<Output=()>, 
+    C: std::marker::Send, 
+    C: std::marker::Sync
+{
     let url = match &start_url.url {
         Some(url)=>url,
         None=>{
@@ -91,7 +97,13 @@ pub async fn execute_deep_scrape(start_url: &StartUrl, data_sender: Sender<DataF
 
 
 
-async fn handle_response_logic(response_logic: ResponseLogic, html_str: String, data_sender: Sender<DataFromScraperValue>) -> Result<(), String>{
+async fn handle_response_logic<'a, C: 'a, F: 'a>(response_logic: &'a ResponseLogic<C, F>, html_str: String, data_sender: Sender<DataFromScraperValue>) -> Result<(), String>
+where
+    C: Fn(Vec<String>) -> F,
+    F: Future, 
+    C: std::marker::Send, 
+    C: std::marker::Sync
+{
     match response_logic {
         Parallel(par_items) => {
             use futures::stream::{self, StreamExt};
@@ -99,7 +111,7 @@ async fn handle_response_logic(response_logic: ResponseLogic, html_str: String, 
             stream::iter(par_items).map(|item| (item, data_sender.clone(), html_str.clone())).for_each_concurrent(
                 /* limit */ 4,
                 |(scrape, sender, html_str)| async move {
-                    handle_scrape(scrape.executables, html_str, sender).await;
+                    handle_scrape(&scrape.executables, html_str, sender).await;
                 }
             ).await;
             Ok(())
@@ -143,7 +155,13 @@ use futures::future::{BoxFuture, FutureExt};
 
 
 
-fn handle_scrape(executables: Vec<Box<Ops>>, html_str: String, data_sender: Sender<DataFromScraperValue>)-> BoxFuture<'static, Result<(), String>>{
+fn handle_scrape<'a, C: 'a, F: 'a>(executables: &'a Vec<Box<Ops<C, F>>>, html_str: String, data_sender: Sender<DataFromScraperValue>)-> BoxFuture<'a, Result<(), String>>
+where
+    C: Fn(Vec<String>) -> F,
+    F: Future, 
+    C: std::marker::Send, 
+    C: std::marker::Sync
+{
     async move {
 
         let mut container = HtmlContainer::new(html_str.clone());
@@ -189,12 +207,6 @@ fn handle_scrape(executables: Vec<Box<Ops>>, html_str: String, data_sender: Send
 
                     }
                 }
-                Text=>{
-                    println!("no more text op");
-                }
-                NavToEach=>{
-                    println!("no more nav to each op");
-                }
                 Ops::ResponseLogic(response_logic)=>{
 
                     println!("ResponseLogic!");
@@ -223,59 +235,27 @@ fn handle_scrape(executables: Vec<Box<Ops>>, html_str: String, data_sender: Send
                     )).await;
 
 
-                    // let data_distributor_stream = DataDistributor::new(receiver);
-                    // let data_distributor_stream_fut: Pin<Box<dyn Future<Output=Vec<DataFromScraperValue>> + Send>>= Box::pin(data_distributor_stream.collect());
-                    // let data_to_manager_sender2 = sender.clone();
-                    // let stream_complete_fut = async move {
-                    //     let res = stream_senders_fut.await;
-                    //     let _res = data_to_manager_sender2.send(
-                    //         DataFromScraperValue::Complete
-                    //     ).await;
-                    //     println!("finished sender stream {:?}", res);
-                    //     res
-                    // };
-
-
-                    // println!("awaiting");
-                    // let (_, res) = join(stream_complete_fut, data_distributor_stream_fut).await;
-                    // let html_strs: Vec<String> = res.iter().map(|data_scraper_value| {
-                    //     match data_scraper_value {
-                    //         DataFromScraperValue::DataFromScraper{text}=>{
-                    //             text.clone()
-                    //         }
-                    //         _ => "".to_string()
-                    //     }
-                    // }).collect();
-                    
-
-                    // stream::iter(html_strs).map(|html_str: String| (html_str, data_sender.clone(), response_logic.clone())).for_each_concurrent(
-                    //     /* limit */ 4,
-                    //     |(html_str, data_sender, response_logic)| async {
-                    //         // idea().await;
-                    //         handle_response_logic(response_logic, html_str, data_sender).await;
-                    //     }
-                    // ).await;   
 
                 }
-                Store=>{
+                Store(f)=>{
                     println!("Store!");
-                    for node in container.node_strs.iter(){
-                        // Can't figure out how to remove this block on because 
-                        // of Scraper crate dependency that uses Cells :(
-                        // let res = node.text().collect::<Vec<_>>().concat();
-                        // let res = container.node_strs.into_iter().flat_map(|item| Html::parse_fragment(&item).root_element().text()).collect::<Vec<_>>().concat();
+                    // for node in container.node_strs.iter(){
+                    //     // Can't figure out how to remove this block on because 
+                    //     // of Scraper crate dependency that uses Cells :(
+                    //     // let res = node.text().collect::<Vec<_>>().concat();
+                    //     // let res = container.node_strs.into_iter().flat_map(|item| Html::parse_fragment(&item).root_element().text()).collect::<Vec<_>>().concat();
                         
-                        let text = Html::parse_fragment(&node).root_element().text().collect::<Vec<_>>().concat();
-                        println!("storing! {:?}", text);
+                    //     let text = Html::parse_fragment(&node).root_element().text().collect::<Vec<_>>().concat();
+                    //     println!("storing! {:?}", text);
 
-                        data_sender.send(
-                            DataFromScraperValue::DataFromScraper{
-                                text
-                            }
-                        ).await;
+                    //     data_sender.send(
+                    //         DataFromScraperValue::DataFromScraper{
+                    //             text
+                    //         }
+                    //     ).await;
 
                         
-                    }
+                    // }
                 }
             }
 

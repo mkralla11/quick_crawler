@@ -14,3 +14,4 @@ scraper = {version = "0.11.0"}
 
 debug_stub_derive = "0.3.0"
 surf = {version = "1.0.3"}
+pin-utils = {version = "0.1.0-alpha.4"}
