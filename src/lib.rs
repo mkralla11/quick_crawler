@@ -289,28 +289,36 @@ mod tests {
                             .response_logic(Parallel(vec![
                                 Scrape::new()
                                     .find(".ingredients-prep .ingredient")
-                                    .store(|vec: Vec<String>| async {
-                                        
-                                    }),
+                                    .store(Box::new(|vec: Vec<String>| -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> {
+                                        Box::pin(async move {
+                                            println!("store ingredients: {:?}", vec);
+                                        })
+                                    })),
                                 Scrape::new()
                                     .find(".ingredients-prep .prep-steps li")
-                                    .store(|vec: Vec<String>| async {
-                                        
-                                    })
+                                    .store(Box::new(|vec: Vec<String>| -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> {
+                                        Box::pin(async move {
+                                            println!("store prep-steps: {:?}", vec);
+                                        })
+                                    })),
                             ])),
                         Scrape::new()
                             .find(".other-feed-item")
                             .response_logic(Parallel(vec![
                                 Scrape::new()
                                     .find(".ingredients-prep .ingredient")
-                                    .store(|vec: Vec<String>| async {
-                                        
-                                    }),
+                                    .store(Box::new(|vec: Vec<String>| -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> {
+                                        Box::pin(async move {
+                                            println!("2: store ingredients: {:?}", vec);
+                                        })
+                                    })),
                                 Scrape::new()
                                     .find(".ingredients-prep .prep-steps li")
-                                    .store(|vec: Vec<String>| async {
-                                        
-                                    })
+                                    .store(Box::new(|vec: Vec<String>| -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> {
+                                        Box::pin(async move {
+                                            println!("2: store prep-steps: {:?}", vec);
+                                        })
+                                    })),
                             ]))  
                     ])
                 )

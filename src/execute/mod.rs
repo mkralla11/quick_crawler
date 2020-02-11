@@ -239,7 +239,7 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_send
                     //             text
                     //         }
                     //     ).await;
-
+                    f(container.node_strs.clone()).await;
                         
                     // }
                 }

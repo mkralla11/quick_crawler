@@ -8,7 +8,7 @@ use std::pin::Pin;
 
 // use pin_utils::{unsafe_pinned, unsafe_unpinned};
 
-#[derive(Clone)]
+// #[derive(Clone)]
 pub enum ResponseLogic
 {
     Parallel(Vec<Scrape>),
@@ -50,7 +50,7 @@ impl StartUrl
     // }
 }
 
-#[derive(Clone)]
+// #[derive(Clone)]
 pub struct Scrape
 {
     pub executables: Vec<Box<Ops>>,
@@ -65,12 +65,12 @@ pub struct Scrape
 // }
 
 
-#[derive(Clone)]
+// #[derive(Clone)]
 pub enum Ops
 {
     Pred(Selector),
     ResponseLogic(ResponseLogic),
-    Store(Box<dyn Fn(Vec<String>) -> Pin<Box<dyn Future<Output = ()>>>>)
+    Store(Box<dyn Fn(Vec<String>) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>  + Send + Sync>)
 }
 
 
@@ -102,15 +102,12 @@ impl Scrape
 
     pub fn store(
         mut self, 
-        c: dyn Fn(Vec<String>) -> Pin<Box<dyn Future<Output = ()> + Send>>
+        c: Box<dyn Fn(Vec<String>) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync>
     ) -> Self
     {
         self.executables.push(Box::new(Ops::Store(c)));
         self
     }
-    // pub fn to_box(self) -> Box<Self> {
-    //     Box::new(self)
-    // }
 }
 
 
