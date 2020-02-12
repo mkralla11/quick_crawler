@@ -295,7 +295,7 @@ mod tests {
                                 Scrape::new()
                                     .find(".ingredients-prep .prep-steps li")
                                     .store(|vec: Vec<String>| async move {
-                                        println!("store ingredients: {:?}", vec);
+                                        println!("store prep-steps: {:?}", vec);
                                     }),
                             ])),
                         Scrape::new()
@@ -309,7 +309,7 @@ mod tests {
                                 Scrape::new()
                                     .find(".ingredients-prep .prep-steps li")
                                     .store(|vec: Vec<String>| async move {
-                                        println!("store ingredients: {:?}", vec);
+                                        println!("store prep-steps: {:?}", vec);
                                     }),
                             ]))  
                     ])

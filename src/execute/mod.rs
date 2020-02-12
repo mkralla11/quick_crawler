@@ -212,7 +212,7 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_send
                             println!("here {:?}", href);
                             // // FOR LIVE RESULTS
                             // let html_str = surf::get(href).recv_string().await.map_err(|_| "Surf error".to_string()).expect("should work");
-                            let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i);
+                            let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i, i);
                             
                             handle_response_logic(&response_logic, html_str, data_sender).await;
 
@@ -239,7 +239,8 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_send
                     //             text
                     //         }
                     //     ).await;
-                    f.call(container.node_strs.clone()).await;
+                    let res = container.node_strs.iter().flat_map(|item| Html::parse_fragment(&item).root_element().text().map(|item| item.to_string()).collect::<Vec<String>>()).collect::<Vec<String>>();
+                    f.call(res).await;
                         
                     // }
                 }
