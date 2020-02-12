@@ -5,6 +5,7 @@ use scraper::{Selector};
 // use futures::future::Shared;
 use std::future::Future;
 use std::pin::Pin;
+use futures::future::{BoxFuture};
 
 // use pin_utils::{unsafe_pinned, unsafe_unpinned};
 
@@ -21,6 +22,26 @@ pub struct StartUrl
     pub url: Option<String>,
     pub method: Option<String>,
     pub response_logic: Option<ResponseLogic>
+}
+
+
+
+pub trait Store: Send + Sync + 'static {
+    /// Invoke the endpoint within the given context
+    fn call<'a>(&'a self, data: Vec<String>) -> BoxFuture<'a, ()>;
+}
+
+pub type DynStore = dyn Store;
+
+impl<F: Send + Sync + 'static, Fut> Store for F
+where
+    F: Fn(Vec<String>) -> Fut,
+    Fut: Future + Send + 'static,
+{
+    fn call<'a>(&'a self, data: Vec<String>) -> BoxFuture<'a, ()> {
+        let fut = (self)(data);
+        Box::pin(async move { fut.await; })
+    }
 }
 
 
@@ -70,7 +91,7 @@ pub enum Ops
 {
     Pred(Selector),
     ResponseLogic(ResponseLogic),
-    Store(Box<dyn Fn(Vec<String>) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>  + Send + Sync>)
+    Store(Box<DynStore>)
 }
 
 
@@ -102,10 +123,10 @@ impl Scrape
 
     pub fn store(
         mut self, 
-        c: Box<dyn Fn(Vec<String>) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync>
+        c: impl Store
     ) -> Self
     {
-        self.executables.push(Box::new(Ops::Store(c)));
+        self.executables.push(Box::new(Ops::Store(Box::new(c))));
         self
     }
 }
