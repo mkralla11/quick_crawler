@@ -37,14 +37,14 @@ struct QuickScraper<'a>
 }
 
 // #[derive(Debug)]
-struct StartUrls
-{
-    data: Vec<StartUrl>
-}
+// struct StartUrls
+// {
+//     data: Vec<StartUrl>
+// }
 
 struct QuickScraperBuilder
 {
-    start_urls: Option<StartUrls>,
+    start_urls: Option<Vec<StartUrl>>,
     limiter: Option<Arc<Limiter>>
 }
 
@@ -59,7 +59,7 @@ impl QuickScraperBuilder
         }
     }
 
-    fn with_start_urls<'a>(&'a mut self, start_urls: StartUrls) -> &'a mut QuickScraperBuilder {
+    fn with_start_urls<'a>(&'a mut self, start_urls: Vec<StartUrl>) -> &'a mut QuickScraperBuilder {
         self.start_urls = Some(start_urls);
         self
     }
@@ -74,7 +74,7 @@ impl QuickScraperBuilder
 
 
     fn finish(&self) -> Result<QuickScraper, QuickScraperError> {
-        let data = &self.start_urls.as_ref().ok_or(QuickScraperError::NoStartUrls)?.data;
+        let data = self.start_urls.as_ref().ok_or(QuickScraperError::NoStartUrls)?;
         Ok(
             QuickScraper {
                 start_urls: stream::iter(data),
@@ -305,46 +305,45 @@ mod tests {
 
 
 
-        let start_urls = StartUrls{
-            data: vec![
-                StartUrl::new()
-                    .url("https://tasty.co/search?q=dinner")
-                    .method("GET")
-                    .response_logic(Parallel(vec![
-                        // will be provided an html page
-                        Scrape::new()
-                            .find(".feed-item")
-                            .response_logic(Parallel(vec![
-                                Scrape::new()
-                                    .find(".ingredients-prep .ingredient")
-                                    .store(|vec: Vec<String>| async move {
-                                        println!("store ingredients: {:?}", vec);
-                                    }),
-                                Scrape::new()
-                                    .find(".ingredients-prep .prep-steps li")
-                                    .store(|vec: Vec<String>| async move {
-                                        println!("store prep-steps: {:?}", vec);
-                                    }),
-                            ])),
-                        Scrape::new()
-                            .find(".other-feed-item")
-                            .response_logic(Parallel(vec![
-                                Scrape::new()
-                                    .find(".ingredients-prep .ingredient")
-                                    .store(|vec: Vec<String>| async move {
-                                        println!("store ingredients: {:?}", vec);
-                                    }),
-                                Scrape::new()
-                                    .find(".ingredients-prep .prep-steps li")
-                                    .store(|vec: Vec<String>| async move {
-                                        println!("store prep-steps: {:?}", vec);
-                                    }),
-                            ]))  
-                    ])
-                )
-                // more StartUrl::new 's 
-            ] 
-        };
+        let start_urls = vec![
+            StartUrl::new()
+                .url("https://tasty.co/search?q=dinner")
+                .method("GET")
+                .response_logic(Parallel(vec![
+                    // will be provided an html page
+                    Scrape::new()
+                        .find(".feed-item")
+                        .response_logic(Parallel(vec![
+                            Scrape::new()
+                                .find(".ingredients-prep .ingredient")
+                                .store(|vec: Vec<String>| async move {
+                                    println!("store ingredients: {:?}", vec);
+                                }),
+                            Scrape::new()
+                                .find(".ingredients-prep .prep-steps li")
+                                .store(|vec: Vec<String>| async move {
+                                    println!("store prep-steps: {:?}", vec);
+                                }),
+                        ])),
+                    Scrape::new()
+                        .find(".other-feed-item")
+                        .response_logic(Parallel(vec![
+                            Scrape::new()
+                                .find(".ingredients-prep .ingredient")
+                                .store(|vec: Vec<String>| async move {
+                                    println!("store ingredients: {:?}", vec);
+                                }),
+                            Scrape::new()
+                                .find(".ingredients-prep .prep-steps li")
+                                .store(|vec: Vec<String>| async move {
+                                    println!("store prep-steps: {:?}", vec);
+                                }),
+                        ]))  
+                ])
+            )
+            // more StartUrl::new 's 
+        ] ;
+
 
         let limiter = Limiter::new();
 
