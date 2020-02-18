@@ -1,7 +1,9 @@
 // use futures::stream::{self, StreamExt};
 use std::mem::replace;
+use std::sync::{Arc};
 
-
+use crate::limiter::Limiter;
+use url::Url;
 use std::future::Future;
 
 use std::pin::Pin;
@@ -19,16 +21,25 @@ use futures::future::{join};
 use async_std::{task};
 extern crate scraper;
 use scraper::{Html};
-use async_std::sync::{channel, Sender};
+use async_std::sync::{Sender};
 
 
 use crate::scrape::{StartUrl, ResponseLogic::{self, Parallel}, Ops::{self, Pred, Store}};
 use crate::{DataFromScraperValue, DataDistributor};
 
 
+async fn limit_url_via<S: Into<String>>(limiter: &Option<Arc<Limiter>>, url: S) -> () {
+
+    if limiter.is_some() {
+        let base = Url::parse(&url.into()).expect("could not parse url");
+        let domain = base.domain().unwrap();
+        limiter.as_ref().unwrap().limit(domain).await;
+    }
+}
 
 
-pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<DataFromScraperValue>)-> Result<(), String>
+
+pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>)-> Result<(), String>
 {
     let url = match &start_url.url {
         Some(url)=>url,
@@ -51,6 +62,8 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
         }
     };
 
+    limit_url_via(&limiter, url).await;
+    
     // // FOR LIVE RESULTS
     // let html_str = req.recv_string().await.map_err(|_| "Surf error".to_string())?;
     // println!("{:?}", html_str);
@@ -84,7 +97,7 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
         }
     };
 
-    handle_response_logic(&response_logic, html_str, data_sender).await;
+    handle_response_logic(&response_logic, html_str, data_sender, limiter).await;
 
     Ok(())
 }
@@ -92,17 +105,17 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
 
 
 
-async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, html_str: String, data_sender: Sender<DataFromScraperValue>) -> Result<(), String>
+async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>) -> Result<(), String>
 
 {
     match response_logic {
         Parallel(par_items) => {
             use futures::stream::{self, StreamExt};
             // loop over each Item in array
-            stream::iter(par_items).map(|item| (item, data_sender.clone(), html_str.clone())).for_each_concurrent(
+            stream::iter(par_items).map(|item| (item, data_sender.clone(), html_str.clone(), limiter.clone())).for_each_concurrent(
                 /* limit */ 4,
-                |(scrape, sender, html_str)| async move {
-                    handle_scrape(&scrape.executables, html_str, sender).await;
+                |(scrape, sender, html_str, limiter)| async move {
+                    handle_scrape(&scrape.executables, html_str, sender, limiter).await;
                 }
             ).await;
             Ok(())
@@ -146,7 +159,7 @@ use futures::future::{BoxFuture, FutureExt};
 
 
 
-fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_sender: Sender<DataFromScraperValue>)-> BoxFuture<'a, Result<(), String>>
+fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>)-> BoxFuture<'a, Result<(), String>>
 {
     Box::pin(async move {
 
@@ -206,15 +219,16 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_send
                     // of Scraper crate dependency that uses Cells :(
                     println!("{:?}", container.node_hrefs);
                     // let (sender, receiver) = channel::<DataFromScraperValue>(5);
-                    Box::pin(stream::iter(&container.node_hrefs).enumerate().map(|(i,href)| (i, href, data_sender.clone(), response_logic.clone())).for_each_concurrent(
+                    Box::pin(stream::iter(&container.node_hrefs).enumerate().map(|(i,href)| (i, href, data_sender.clone(), response_logic.clone(), limiter.clone())).for_each_concurrent(
                         /* limit */ 5,
-                        |(i, href, data_sender, response_logic)| async move {
+                        |(i, href, data_sender, response_logic, limiter)| async move {
                             println!("here {:?}", href);
+                            limit_url_via(&limiter, href).await;
                             // // FOR LIVE RESULTS
                             // let html_str = surf::get(href).recv_string().await.map_err(|_| "Surf error".to_string()).expect("should work");
                             let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i, i);
                             
-                            handle_response_logic(&response_logic, html_str, data_sender).await;
+                            handle_response_logic(&response_logic, html_str, data_sender, limiter).await;
 
                             // async_std::task::yield_now().await;
                         }
@@ -225,24 +239,8 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_send
                 }
                 Store(f)=>{
                     println!("Store!");
-                    // for node in container.node_strs.iter(){
-                    //     // Can't figure out how to remove this block on because 
-                    //     // of Scraper crate dependency that uses Cells :(
-                    //     // let res = node.text().collect::<Vec<_>>().concat();
-                    //     // let res = container.node_strs.into_iter().flat_map(|item| Html::parse_fragment(&item).root_element().text()).collect::<Vec<_>>().concat();
-                        
-                    //     let text = Html::parse_fragment(&node).root_element().text().collect::<Vec<_>>().concat();
-                    //     println!("storing! {:?}", text);
-
-                    //     data_sender.send(
-                    //         DataFromScraperValue::DataFromScraper{
-                    //             text
-                    //         }
-                    //     ).await;
                     let res = container.node_strs.iter().flat_map(|item| Html::parse_fragment(&item).root_element().text().map(|item| item.to_string()).collect::<Vec<String>>()).collect::<Vec<String>>();
                     f.call(res).await;
-                        
-                    // }
                 }
             }
 

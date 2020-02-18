@@ -8,6 +8,8 @@ edition = "2018"
 
 [dependencies]
 futures = { version = "0.3.1", features = ["compat"] }
+#futures01 = { package = "futures", version = "0.1", optional = true }
+#futures-preview = { version = "0.3.0-alpha.19", features = ["compat"] }
 futures-core-preview="0.3.0-alpha.19"
 async-std = {version = "1.4.0", features = ["unstable"]}
 scraper = {version = "0.11.0"}
@@ -15,3 +17,8 @@ scraper = {version = "0.11.0"}
 debug_stub_derive = "0.3.0"
 surf = {version = "1.0.3"}
 pin-utils = {version = "0.1.0-alpha.4"}
+
+ratelimit_futures = {version = "0.0.1"}
+ratelimit_meter = {version = "4.0.1"}
+dashmap = "3.4.4"
+url = "2.1.1"

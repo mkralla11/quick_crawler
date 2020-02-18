@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::pin::Pin;
 mod execute;
 use crate::execute::execute_deep_scrape;
+mod limiter;
+use limiter::Limiter;
 
 #[macro_use]
 extern crate debug_stub_derive;
@@ -31,6 +33,7 @@ enum QuickScraperError {
 struct QuickScraper<'a>
 {
     start_urls: StreamIter<std::slice::Iter<'a, StartUrl>>,
+    limiter: Option<Arc<Limiter>>
 }
 
 // #[derive(Debug)]
@@ -41,40 +44,64 @@ struct StartUrls
 
 struct QuickScraperBuilder
 {
-    start_urls: Option<StartUrls>
+    start_urls: Option<StartUrls>,
+    limiter: Option<Arc<Limiter>>
 }
 
-trait BuilderWithStartUrls
-{
-    fn with(self: &mut Self, start_urls: StartUrls) -> &QuickScraperBuilder;
-}
 
 
 impl QuickScraperBuilder
 {
     fn new() -> QuickScraperBuilder{
         QuickScraperBuilder {
-            start_urls: None
+            start_urls: None,
+            limiter: None
         }
     }
+
+    fn with_start_urls<'a>(&'a mut self, start_urls: StartUrls) -> &'a mut QuickScraperBuilder {
+        self.start_urls = Some(start_urls);
+        self
+    }
+
+
+
+    fn with_limiter<'a>(&'a mut self, limiter: Limiter) -> &'a mut QuickScraperBuilder {
+        self.limiter = Some(Arc::new(limiter));
+        self
+    }
+
+
+
     fn finish(&self) -> Result<QuickScraper, QuickScraperError> {
         let data = &self.start_urls.as_ref().ok_or(QuickScraperError::NoStartUrls)?.data;
         Ok(
             QuickScraper {
-                start_urls: stream::iter(data)
+                start_urls: stream::iter(data),
+                limiter: self.limiter.clone()
             }
         )
     }
 }
 
 
-impl BuilderWithStartUrls for QuickScraperBuilder
-{
-    fn with(&mut self, start_urls: StartUrls) -> &QuickScraperBuilder {
-        self.start_urls = Some(start_urls);
-        self
-    }
-}
+// impl BuilderWithStartUrls for QuickScraperBuilder
+// {
+//     fn with(&mut self, start_urls: StartUrls) -> &QuickScraperBuilder {
+//         self.start_urls = Some(start_urls);
+//         self
+//     }
+// }
+
+// impl BuilderWithLimiter for QuickScraperBuilder
+// {
+//     fn with(&mut self, limiter: Limiter) -> &QuickScraperBuilder {
+//         self.limiter = Some(limiter);
+//         self
+//     }
+// }
+
+
 
 #[derive(Debug)]
 pub enum DataFromScraperValue{
@@ -170,7 +197,7 @@ impl Stream for DataDistributor {
 
 
 
-async fn dispatch<'a>(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<DataFromScraperValue>, start_url: &'a StartUrl) -> ()
+async fn dispatch<'a>(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<DataFromScraperValue>, start_url: &'a StartUrl, limiter: Option<Arc<Limiter>>) -> ()
 {
     let mut count = count.lock().unwrap();
     *count += 1;
@@ -190,7 +217,7 @@ async fn dispatch<'a>(count: Arc<Mutex<usize>>, data_to_manager_sender: Sender<D
     //         count: val
     //     }
     // ).await;
-    let res = execute_deep_scrape(&start_url, data_to_manager_sender).await;
+    let res = execute_deep_scrape(&start_url, data_to_manager_sender, limiter).await;
     // async_std::task::yield_now().await;
     println!("in loop: {:?} {:?} {:?}", start_url.url, val, res);
 
@@ -206,12 +233,13 @@ impl<'a> QuickScraper<'a>
         let count = Arc::new(Mutex::new(0usize));
         let (data_to_manager_sender, data_to_manager_receiver) = channel::<DataFromScraperValue>(100);
 
+        let limiter = self.limiter;
 
-        let stream_senders_fut: Pin<Box<dyn Future<Output=()>>> = Box::pin(self.start_urls.enumerate().map(|(i, url)| (i, count.clone(), data_to_manager_sender.clone(), url)).for_each_concurrent(
+        let stream_senders_fut: Pin<Box<dyn Future<Output=()>>> = Box::pin(self.start_urls.enumerate().map(|(i, url)| (i, count.clone(), data_to_manager_sender.clone(), url, limiter.clone())).for_each_concurrent(
             3,
-            |(_i, count, data_to_manager_sender, start_url)| async move {
+            |(_i, count, data_to_manager_sender, start_url, limiter)| async move {
                 // let i = i + 1;
-                dispatch(count, data_to_manager_sender, start_url).await;
+                dispatch(count, data_to_manager_sender, start_url, limiter).await;
                 async_std::task::yield_now().await;
             }
         ));
@@ -318,10 +346,15 @@ mod tests {
             ] 
         };
 
+        let limiter = Limiter::new();
 
-        builder.with(
-            start_urls
-        );
+        builder
+            .with_start_urls(
+                start_urls
+            )
+            .with_limiter(
+                limiter
+            );
         let scraper = builder.finish().map_err(|_| "Builder could not finish").expect("no error");
         let res = task::block_on(async {
             println!("\n");
@@ -337,14 +370,14 @@ mod tests {
 
     }
 
-    #[test]
-    // #[should_panic]
-    fn no_start_urls_finished() {
-        let builder = QuickScraperBuilder::new();
+    // #[test]
+    // // #[should_panic]
+    // fn no_start_urls_finished() {
+    //     let builder = QuickScraperBuilder::new();
 
 
-        let scraper_result = builder.finish();
-         assert!(scraper_result.is_err());
-         // assert_eq!(scraper_result, Err(QuickScraperError::NoStartUrls));
-    }
+    //     let scraper_result = builder.finish();
+    //      assert!(scraper_result.is_err());
+    //      // assert_eq!(scraper_result, Err(QuickScraperError::NoStartUrls));
+    // }
 }
