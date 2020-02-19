@@ -33,7 +33,7 @@
 //! ```
 //! 
 //! 
-//!     and when navigating to *links 1 through 3* on that page, EACH PAGE returns:
+//!   and when navigating to *links 1 through 3* on that page, EACH PAGE returns:
 //! 
 //!   ```html
 //!   <html>
