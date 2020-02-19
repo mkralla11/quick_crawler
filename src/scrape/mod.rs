@@ -89,7 +89,11 @@ pub struct Scrape
 // #[derive(Clone)]
 pub enum Ops
 {
-    Pred(Selector),
+    // Pred(Selector),
+    UrlSelector(Selector),
+    UrlExtractor(ElementUrlExtractor),
+    DataSelector(Selector),
+    DataExtractor(ElementDataExtractor),
     ResponseLogic(ResponseLogic),
     Store(Box<DynStore>)
 }
@@ -102,6 +106,13 @@ pub enum Ops
 //     foo: fn(u8) -> F,
 // }
 
+pub enum ElementUrlExtractor {
+    Attr(String)
+}
+
+pub enum ElementDataExtractor {
+    Text
+}
 
 impl Scrape
 {
@@ -112,8 +123,25 @@ impl Scrape
             executables: vec![]
         }
     }
-    pub fn find<S: Into<String>>(mut self, predicate: S) -> Self {
-        self.executables.push(Box::new(Ops::Pred(Selector::parse(&predicate.into()).unwrap())));
+    // pub fn find<S: Into<String>>(mut self, predicate: S) -> Self {
+    //     self.executables.push(Box::new(Ops::Pred(Selector::parse(&predicate.into()).unwrap())));
+    //     self
+    // }
+    pub fn find_elements_with_data<S: Into<String>>(mut self, predicate: S) -> Self {
+        self.executables.push(Box::new(Ops::DataSelector(Selector::parse(&predicate.into()).unwrap())));
+        self
+    }
+    pub fn extract_data_from_elements(mut self, extractor: ElementDataExtractor) -> Self {
+        self.executables.push(Box::new(Ops::DataExtractor(extractor)));
+        self
+    }
+
+    pub fn find_elements_with_urls<S: Into<String>>(mut self, predicate: S) -> Self {
+        self.executables.push(Box::new(Ops::UrlSelector(Selector::parse(&predicate.into()).unwrap())));
+        self
+    }
+    pub fn extract_urls_from_elements(mut self, extractor: ElementUrlExtractor) -> Self {
+        self.executables.push(Box::new(Ops::UrlExtractor(extractor)));
         self
     }
     pub fn response_logic(mut self, resp_logic: ResponseLogic) -> Self {

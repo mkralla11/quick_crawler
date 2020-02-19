@@ -22,3 +22,4 @@ ratelimit_futures = {version = "0.0.1"}
 ratelimit_meter = {version = "4.0.1"}
 dashmap = "3.4.4"
 url = "2.1.1"
+mockito = "0.23.1"

@@ -1,14 +1,14 @@
 use dashmap::DashMap;
 use futures::prelude::*;
-use futures::future::{self, join_all};
-use std::time::{Duration, Instant};
+use futures::future::{join_all};
+use std::time::{Instant};
 
 use ratelimit_meter::{DirectRateLimiter, LeakyBucket};
 use ratelimit_futures::Ratelimit;
 use std::num::NonZeroU32;
 use futures::{
   compat::{Future01CompatExt, Stream01CompatExt},
-  future::{FutureExt, TryFutureExt},
+  future::{TryFutureExt},
 };
 
 
@@ -28,7 +28,7 @@ impl Limiter {
     }
 
 
-    pub async fn limit<S: Into<String>>(&self, id: S) -> Result<(), String> {
+    pub async fn limit<S: Into<String>>(&self, id: S) -> () {
         let id = id.into();
         let lim = match self.hash.get(&id) {
             Some(limiter)=>{
@@ -47,7 +47,6 @@ impl Limiter {
             let ratelimit_future = Ratelimit::new(&mut lim);
             ratelimit_future.compat().await.expect("ratelimit_future unknown error");
         };
-        Ok(())
     }
 }
 
@@ -75,10 +74,7 @@ mod tests {
                 let mut futs = Vec::new();
                 futs.push(limiter.limit("domain.com"));
                 futs.push(limiter.limit("domain.com"));
-                futs.push(limiter.limit("domain.com"));
-                futs.push(limiter.limit("domain.com"));
-                futs.push(limiter.limit("domain.com"));
-                futs.push(limiter.limit("domain.com"));
+
 
                 println!("before limit");
                 let start = Instant::now();

@@ -1,5 +1,7 @@
 // use futures::stream::{self, StreamExt};
 use std::mem::replace;
+use scraper::{Selector};
+
 use std::sync::{Arc};
 
 use crate::limiter::Limiter;
@@ -24,80 +26,65 @@ use scraper::{Html};
 use async_std::sync::{Sender};
 
 
-use crate::scrape::{StartUrl, ResponseLogic::{self, Parallel}, Ops::{self, Pred, Store}};
-use crate::{DataFromScraperValue, DataDistributor};
+use crate::scrape::{StartUrl, ResponseLogic::{self, Parallel}, ElementUrlExtractor, ElementDataExtractor,  Ops::{self, *}};
+use crate::{DataFromScraperValue, QuickScraperError::{self, *}};
 
 
-async fn limit_url_via<S: Into<String>>(limiter: &Option<Arc<Limiter>>, url: S) -> () {
+async fn limit_url_via<S: Copy +  Into<String>>(limiter: &Option<Arc<Limiter>>, url: S) -> Result<(), QuickScraperError> {
 
     if limiter.is_some() {
-        let base = Url::parse(&url.into()).expect("could not parse url");
-        let domain = base.domain().unwrap();
+        let base = Url::parse(&url.into()).map_err(|_| QuickScraperError::ParseDomainErr)?;
+        
+        // println!("unwrapping {:?}", url.into().clone());
+        let domain = match base.host_str() {
+            Some(d) =>d,
+            None => return Err(QuickScraperError::ParseDomainErr)
+        };
+        // println!("unwrapped {:?}", domain.clone());
         limiter.as_ref().unwrap().limit(domain).await;
-    }
+    };
+    Ok(())
 }
 
 
 
-pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>)-> Result<(), String>
+pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>)-> Result<(), QuickScraperError>
 {
     let url = match &start_url.url {
         Some(url)=>url,
         None=>{
-            return Err("No Start Url".into())
+            return Err(NoUrlInStartUrlErr)
         }
     };
 
     let req = match &start_url.method {
-        Some(m) if m == "GET" =>"STUB URL REQ GET".to_string(),
-        Some(m) if m == "POST" =>"STUB URL REQ POST".to_string(),
+        // Some(m) if m == "GET" =>"STUB URL REQ GET".to_string(),
+        // Some(m) if m == "POST" =>"STUB URL REQ POST".to_string(),
         // // FOR LIVE RESULTS
-        // Some(m) if m == "GET" =>surf::get(url),
-        // Some(m) if m == "POST" =>surf::post(url),
+        Some(m) if m == "GET" =>surf::get(url),
+        Some(m) if m == "POST" =>surf::post(url),
         Some(m)=>{
-            return Err(format!("The method '{m}' is not a valid http method", m=m));
+            return Err(InvalidStartUrlMethodErr(m.to_string()))
         }
         None=>{
-            return Err("No http method".into())
+            return Err(NoStartUrlMethodErr)
         }
     };
 
-    limit_url_via(&limiter, url).await;
+    limit_url_via(&limiter, url).await?;
     
     // // FOR LIVE RESULTS
-    // let html_str = req.recv_string().await.map_err(|_| "Surf error".to_string())?;
-    // println!("{:?}", html_str);
-
-
-
-    let html_str = r#"
-        <div>
-            <a class="feed-item" href="https://tasty.co/compilation/another-meal-1">
-                link to another meal 1
-            </a>
-            <a class="feed-item" href="https://tasty.co/compilation/another-meal-2">
-                link to another meal 2
-            </a>
-            <a class="feed-item" href="https://tasty.co/compilation/another-meal-3">
-                link to another meal 3
-            </a>
-            <div>
-                <a class="other-feed-item" href="https://tasty.co/compilation/other-another-meal-1">
-                    other link to another meal 1
-                </a>
-            </div>
-        </div>
-    "#.into();
+    let html_str = req.recv_string().await.map_err(|_| SurfRequestErr)?;
 
 
     let response_logic = match &start_url.response_logic {
         Some(response_logic)=>response_logic.clone(),
         None=>{
-            return Err("No response_logic".into())
+            return Err(NoResponseLogicErr)
         }
     };
 
-    handle_response_logic(&response_logic, html_str, data_sender, limiter).await;
+    handle_response_logic(&response_logic, html_str, data_sender, limiter).await?;
 
     Ok(())
 }
@@ -105,7 +92,7 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
 
 
 
-async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>) -> Result<(), String>
+async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>) -> Result<(), QuickScraperError>
 
 {
     match response_logic {
@@ -121,30 +108,29 @@ async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, html_str: 
             Ok(())
         }
         _ => {
-            return Err("Unknown logic".into())
+            return Err(UnknownResponseLogicErr)
         }
     }
 }
 
-enum DocOrNodes {
-    Document,
-    Nodes
-}
+
 struct HtmlContainer {
     html_str: String,
-    node_strs: Vec<String>,
-    node_hrefs: Vec<String>,
-    doc_or_nodes: DocOrNodes
+    url_node_strs: Vec<String>,
+    data_node_strs: Vec<String>,
+    node_urls: Vec<String>,
+    data_items: Vec<String>,
 }
 
 impl HtmlContainer{
     fn new(html_str: String)-> HtmlContainer {
         HtmlContainer{
             html_str,
-            node_strs: vec![],
-            node_hrefs: vec![],
+            url_node_strs: vec![],
+            data_node_strs: vec![],
+            node_urls: vec![],
+            data_items: vec![],
             // next_: vec![],
-            doc_or_nodes: DocOrNodes::Document
         }
     }
 }
@@ -154,8 +140,56 @@ use futures::future::{BoxFuture, FutureExt};
 
 
 
+fn find_node_strs(pred: &Selector, html_str: &str) -> Vec<String> {
+    let mut node_strs = Vec::new();
+    // let node_strs = replace(&mut container.node_strs, vec![]);
+    Html::parse_fragment(html_str).select(pred).for_each(|node| {
+        node_strs.push(node.html().replace('\n', "").trim().to_owned());
+    });
+    return node_strs
+}
 
+fn find_urls(ex: &ElementUrlExtractor, node_strs: &Vec<String>) -> Vec<String> {
+    let mut urls = Vec::new();
+    // let node_strs = replace(&mut container.node_strs, vec![]);
+    node_strs.iter().for_each(|node| {
+        let node_el = Html::parse_fragment(&node);
 
+        match ex {
+            ElementUrlExtractor::Attr(target_attr) => {
+                node_el.root_element().children().for_each(|child| {
+                    child
+                        .value()
+                        .as_element()
+                        .and_then(|el| el.attr(target_attr))
+                        .map(|url| {
+                            // println!("url {:?}", url);
+                            urls.push(url.to_owned());
+                        });
+                })
+            }
+        };
+    });
+
+    return urls
+}
+
+fn find_data(ex: &ElementDataExtractor, node_strs: &Vec<String>) -> Vec<String> {
+    let mut urls = Vec::new();
+    // let node_strs = replace(&mut container.node_strs, vec![]);
+    node_strs.iter().for_each(|node| {
+        let node_el = Html::parse_fragment(&node);
+
+        match ex {
+            ElementDataExtractor::Text => {
+                // let element_value = Html::parse_fragment(&node).root_element().value();
+                urls.extend(node_el.root_element().text().map(|item| item.trim().to_string()).collect::<Vec<String>>());
+            }
+        };
+    });
+
+    return urls
+}
 
 
 
@@ -165,68 +199,47 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_send
 
         let mut container = HtmlContainer::new(html_str.clone());
 
-        for (i, executable) in executables.iter().enumerate() {
-            println!("executable {:?}", i);
+        for executable in executables.iter() {
+            // println!("executable {:?}", i);
             match &**executable {
-                Pred(pred)=>{
-                    println!("Pred!");
-                    match container.doc_or_nodes {
-                        DocOrNodes::Document=>{
-                            let node_strs = replace(&mut container.node_strs, vec![]);
-                            container.node_hrefs = vec![];
-                            Html::parse_fragment(&container.html_str).select(&pred).for_each(|node| {
-                                
-                                container.node_strs.push(node.html().to_owned());
-                                let href = node.value().attr("href");
-                                if href.is_some() {
-                                    container.node_hrefs.push(href.unwrap().to_owned());
-                                }
-                            });
-
-
-                            container.doc_or_nodes = DocOrNodes::Nodes;
-                        } 
-                        DocOrNodes::Nodes=>{
-                            let node_strs = replace(&mut container.node_strs, vec![]);
-                            container.node_hrefs = vec![];
-                            node_strs.into_iter().for_each(|item| {
-                                let doc = Html::parse_fragment(&item);
-                                doc.select(&pred).for_each(|node| {
-                                    
-                                    container.node_strs.push(node.html().to_owned());
-                                    let href = node.value().attr("href");
-                                    if href.is_some() {
-                                        container.node_hrefs.push(href.unwrap().to_owned());
-                                    }
-                                });
-
-                            });
-                            container.doc_or_nodes = DocOrNodes::Nodes;
-                        }
-
-                    }
+                UrlSelector(selector_str)=>{
+                    let node_strs = find_node_strs(&selector_str, &container.html_str);
+                    replace(&mut container.url_node_strs, node_strs);
+                }
+                DataSelector(selector_str)=>{
+                    // println!("Pred!");
+                    let node_strs = find_node_strs(&selector_str, &container.html_str);
+                    replace(&mut container.data_node_strs, node_strs);
+                }
+                UrlExtractor(ex)=>{
+                    let urls = find_urls(ex, &container.url_node_strs);
+                    replace(&mut container.node_urls, urls);
+                }
+                DataExtractor(ex)=>{
+                    let data_items = find_data(ex, &container.data_node_strs);
+                    replace(&mut container.data_items, data_items);
                 }
                 Ops::ResponseLogic(response_logic)=>{
 
-                    println!("ResponseLogic!");
+                    // println!("ResponseLogic!");
 
                     use futures::stream::{self, StreamExt};
                     
-                    // let hrefs = container.node_hrefs;
+                    // let hrefs = container.node_urls;
                     
 
                     // Can't figure out how to remove this block on because 
                     // of Scraper crate dependency that uses Cells :(
-                    println!("{:?}", container.node_hrefs);
+                    // println!("{:?}", container.node_urls);
                     // let (sender, receiver) = channel::<DataFromScraperValue>(5);
-                    Box::pin(stream::iter(&container.node_hrefs).enumerate().map(|(i,href)| (i, href, data_sender.clone(), response_logic.clone(), limiter.clone())).for_each_concurrent(
+                    Box::pin(stream::iter(&container.node_urls).map(|href| (href, data_sender.clone(), response_logic.clone(), limiter.clone())).for_each_concurrent(
                         /* limit */ 5,
-                        |(i, href, data_sender, response_logic, limiter)| async move {
-                            println!("here {:?}", href);
+                        |(href, data_sender, response_logic, limiter)| async move {
+                            // println!("here {:?}", href);
                             limit_url_via(&limiter, href).await;
                             // // FOR LIVE RESULTS
-                            // let html_str = surf::get(href).recv_string().await.map_err(|_| "Surf error".to_string()).expect("should work");
-                            let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i, i);
+                            let html_str = surf::get(href).recv_string().await.map_err(|_| "Surf error".to_string()).expect("should work");
+                            // let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i, i);
                             
                             handle_response_logic(&response_logic, html_str, data_sender, limiter).await;
 
@@ -238,8 +251,7 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_send
 
                 }
                 Store(f)=>{
-                    println!("Store!");
-                    let res = container.node_strs.iter().flat_map(|item| Html::parse_fragment(&item).root_element().text().map(|item| item.to_string()).collect::<Vec<String>>()).collect::<Vec<String>>();
+                    let res = container.data_items.iter().map(|x| x.to_string()).collect::<Vec<String>>();
                     f.call(res).await;
                 }
             }
