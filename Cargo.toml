@@ -1,5 +1,5 @@
 [package]
-name = "quick_scraper"
+name = "quick_crawler"
 version = "0.1.0"
 authors = ["Michael Khirallah <mike.mkrallaproductions@gmail.com>"]
 edition = "2018"

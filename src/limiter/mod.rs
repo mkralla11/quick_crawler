@@ -36,7 +36,7 @@ impl Limiter {
                 limiter
             }
             None=>{
-                let lim = DirectRateLimiter::<LeakyBucket>::per_second(NonZeroU32::new(1).unwrap());
+                let lim = DirectRateLimiter::<LeakyBucket>::per_second(NonZeroU32::new(3).unwrap());
                 // println!("first limiter!");
                 self.hash.insert(id.clone(), lim);
                 self.hash.get(&id).unwrap()
@@ -72,6 +72,8 @@ mod tests {
 
             let c = || async move {
                 let mut futs = Vec::new();
+                futs.push(limiter.limit("domain.com"));
+                futs.push(limiter.limit("domain.com"));
                 futs.push(limiter.limit("domain.com"));
                 futs.push(limiter.limit("domain.com"));
 

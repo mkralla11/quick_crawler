@@ -27,18 +27,18 @@ use async_std::sync::{Sender};
 
 
 use crate::scrape::{StartUrl, ResponseLogic::{self, Parallel}, ElementUrlExtractor, ElementDataExtractor,  Ops::{self, *}};
-use crate::{DataFromScraperValue, QuickScraperError::{self, *}};
+use crate::{DataFromScraperValue, QuickCrawlerError::{self, *}};
 
 
-async fn limit_url_via<S: Copy +  Into<String>>(limiter: &Option<Arc<Limiter>>, url: S) -> Result<(), QuickScraperError> {
+async fn limit_url_via<S: Copy +  Into<String>>(limiter: &Option<Arc<Limiter>>, url: S) -> Result<(), QuickCrawlerError> {
 
     if limiter.is_some() {
-        let base = Url::parse(&url.into()).map_err(|_| QuickScraperError::ParseDomainErr)?;
+        let base = Url::parse(&url.into()).map_err(|_| QuickCrawlerError::ParseDomainErr)?;
         
         // println!("unwrapping {:?}", url.into().clone());
         let domain = match base.host_str() {
             Some(d) =>d,
-            None => return Err(QuickScraperError::ParseDomainErr)
+            None => return Err(QuickCrawlerError::ParseDomainErr)
         };
         // println!("unwrapped {:?}", domain.clone());
         limiter.as_ref().unwrap().limit(domain).await;
@@ -48,7 +48,7 @@ async fn limit_url_via<S: Copy +  Into<String>>(limiter: &Option<Arc<Limiter>>, 
 
 
 
-pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>)-> Result<(), QuickScraperError>
+pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>)-> Result<(), QuickCrawlerError>
 {
     let url = match &start_url.url {
         Some(url)=>url,
@@ -92,7 +92,7 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
 
 
 
-async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>) -> Result<(), QuickScraperError>
+async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>) -> Result<(), QuickCrawlerError>
 
 {
     match response_logic {
