@@ -185,6 +185,9 @@ To run tests:
 
 See the `src/lib.rs` test for example usage.
 
+# Thank You For Using!
+
+If you use this crate and you found it helpful to your project, please star it!
 
 
 # License
