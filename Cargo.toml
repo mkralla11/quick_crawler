@@ -8,7 +8,7 @@ license = "Apache-2.0/MIT"
 repository = "https://github.com/mkralla11/quick_crawler"
 homepage = "https://github.com/mkralla11/quick_crawler"
 description = "QuickCrawler is a Rust crate that provides a completely async, declarative web crawler with domain-specific request rate-limiting built-in."
-categories = ["web", "crawler", "bot", "spider", "scraper", "asynchronous", "concurrency", "network-programming", "extensions", "limiter"]
+categories = ["web", "crawler", "scraper", "asynchronous", "concurrency"]
 readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
