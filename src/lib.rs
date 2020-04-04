@@ -186,7 +186,7 @@ extern crate debug_stub_derive;
 pub mod scrape;
 use crate::scrape::{ResponseLogic::Parallel, StartUrl, Scrape, ElementUrlExtractor, ElementDataExtractor};
 
-use futures::stream::{self, StreamExt, Iter as StreamIter};
+use futures::stream::{self, StreamExt, TryStreamExt, Iter as StreamIter};
 use futures::{ready, Stream};
 // use futures::channel::mpsc::channel;
 use async_std::sync::{channel, Receiver, Sender};
@@ -415,12 +415,13 @@ impl<'a> QuickCrawler<'a>
 
         let limiter = self.limiter;
 
-        let stream_senders_fut: Pin<Box<dyn Future<Output=()>>> = Box::pin(self.start_urls.map(|url| (data_to_manager_sender.clone(), url, limiter.clone())).for_each_concurrent(
+        let stream_senders_fut: Pin<Box<dyn Future<Output=Result<(), QuickCrawlerError>>>> = Box::pin(self.start_urls.map(|url| (data_to_manager_sender.clone(), url, limiter.clone())).map(Ok).try_for_each_concurrent(
             3,
             |(data_to_manager_sender, start_url, limiter)| async move {
                 // let i = i + 1;
-                dispatch(data_to_manager_sender, start_url, limiter).await;
+                let res = dispatch(data_to_manager_sender, start_url, limiter).await;
                 async_std::task::yield_now().await;
+                res
             }
         ));
 
@@ -494,6 +495,8 @@ mod tests {
         let url3 = format!("{}{}", base_url, path3);
         let url4 = format!("{}{}", base_url, path4);
 
+        // Make sure to support RELATIVE PATH
+        // (as shown below using path4 variable)
         let _m1 = mock("GET", start_path)
             .with_body(
                 format!(r#"
@@ -514,7 +517,7 @@ mod tests {
                             </div>
                         </div>
                     </html>
-                "#, url1, url2, url3, url4)
+                "#, url1, url2, url3, path4)
             )
             .create();
         
