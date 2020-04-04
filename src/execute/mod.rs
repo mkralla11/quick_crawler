@@ -39,7 +39,7 @@ async fn limit_url_via<S: Copy +  Into<String>>(limiter: &Option<Arc<Limiter>>, 
             Some(d) =>d,
             None => return Err(QuickCrawlerError::ParseDomainErr)
         };
-        println!("host_str {:?}", domain);
+        // println!("host_str {:?}", domain);
         // println!("unwrapped {:?}", domain.clone());
         limiter.as_ref().unwrap().limit(domain).await;
     };
@@ -137,7 +137,7 @@ fn construct_full_url(domain: &str, href: &str)-> Result<String, QuickCrawlerErr
         Ok(d) =>href.to_string(),
         _ => format!("{}{}", domain, href).to_string()
     };
-    println!("full_url: {:?}", full_url);
+    // println!("full_url: {:?}", full_url);
     Ok(full_url.clone())
 }
 
