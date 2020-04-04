@@ -114,28 +114,32 @@ async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, original_u
     }
 }
 
-fn get_domain_from_url(url: &str)-> Result<String, QuickCrawlerError>{
-    let base = Url::parse(url.into()).map_err(|_| QuickCrawlerError::ParseDomainErr)?;
-    let domain = match base.host_str() {
-        Some(d) => format!("{}://{}", base.scheme(), d).to_string(),
-        None => return Err(QuickCrawlerError::ParseDomainErr)
-    };
+// fn get_domain_from_url(url: &str)-> Result<String, QuickCrawlerError>{
+//     let base = Url::parse(url.into()).map_err(|_| QuickCrawlerError::ParseDomainErr)?;
+//     let domain = match base.host_str() {
+//         Some(d) => format!("{}://{}", base.scheme(), d).to_string(),
+//         None => return Err(QuickCrawlerError::ParseDomainErr)
+//     };
 
-    let domain = match base.port() {
-        Some(p) => format!("{}:{}", domain, p).to_string(),
-        None => domain
-    };
+//     let domain = match base.port() {
+//         Some(p) => format!("{}:{}", domain, p).to_string(),
+//         None => domain
+//     };
 
-    Ok(domain.to_string())
-}
+//     Ok(domain.to_string())
+// }
 
-fn construct_full_url(domain: &str, href: &str)-> Result<String, QuickCrawlerError>{
+fn construct_full_url(original: &str, href: &str)-> Result<String, QuickCrawlerError>{
     // println!("domain: {:?} - href: {:?}", domain, href);
     let res = Url::parse(href.into());
     // println!("base {:?}", base);
     let full_url = match res {
-        Ok(d) =>href.to_string(),
-        _ => format!("{}{}", domain, href).to_string()
+        Ok(d) => href.to_string(),
+        Err(url::ParseError::RelativeUrlWithoutBase) => {
+            let base = Url::parse(original).map_err(|_| QuickCrawlerError::ParseDomainErr)?;
+            base.join(href).map_err(|_| QuickCrawlerError::ParseDomainErr)?.to_string()
+        },
+        _ => return Err(QuickCrawlerError::ParseDomainErr)
     };
     // println!("full_url: {:?}", full_url);
     Ok(full_url.clone())
@@ -166,8 +170,8 @@ impl HtmlContainer{
         }
     }
 
-    fn get_original_domain(&self)-> Result<String, QuickCrawlerError> {
-        get_domain_from_url(&self.original_url)
+    fn get_original_url(&self)-> String {
+        self.original_url.to_string()
     }
 }
 
@@ -268,12 +272,12 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, original_url: String, html_
                     // of Scraper crate dependency that uses Cells :(
                     // println!("{:?}", container.node_urls);
                     // let (sender, receiver) = channel::<DataFromScraperValue>(5);
-                    let original_domain = container.get_original_domain()?;
-                    let res: Result<(), QuickCrawlerError> = Box::pin(stream::iter(&container.node_urls).map(|href| (original_domain.clone(), href.clone(), data_sender.clone(), response_logic.clone(), limiter.clone())).map(Ok).try_for_each_concurrent(
+                    let original_url = container.get_original_url().clone();
+                    let res: Result<(), QuickCrawlerError> = Box::pin(stream::iter(&container.node_urls).map(|href| (original_url.clone(), href.clone(), data_sender.clone(), response_logic.clone(), limiter.clone())).map(Ok).try_for_each_concurrent(
                         /* limit */ 5,
-                        |(original_domain, href, data_sender, response_logic, limiter)| async move {
+                        |(original_url, href, data_sender, response_logic, limiter)| async move {
                             // println!("here {:?}", href);
-                            let full_url = construct_full_url(&original_domain, &href)?;
+                            let full_url = construct_full_url(&original_url, &href)?;
                             limit_url_via(&limiter, &full_url).await?;
                             
                             // // FOR LIVE RESULTS

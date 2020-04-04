@@ -487,7 +487,8 @@ mod tests {
         let path1 = "/compilation/another-meal-1";
         let path2 = "/compilation/another-meal-2";
         let path3 = "/compilation/another-meal-3";
-        let path4 = "/compilation/other-meal-1";
+        // relative path
+        let path4 = "../compilation/other-meal-1";
 
         let start_url = format!("{}{}", base_url, start_path);
         let url1 = format!("{}{}", base_url, path1);
