@@ -34,12 +34,12 @@ async fn limit_url_via<S: Copy +  Into<String>>(limiter: &Option<Arc<Limiter>>, 
 
     if limiter.is_some() {
         let base = Url::parse(&url.into()).map_err(|_| QuickCrawlerError::ParseDomainErr)?;
-        
         // println!("unwrapping {:?}", url.into().clone());
         let domain = match base.host_str() {
             Some(d) =>d,
             None => return Err(QuickCrawlerError::ParseDomainErr)
         };
+        // println!("host_str {:?}", domain);
         // println!("unwrapped {:?}", domain.clone());
         limiter.as_ref().unwrap().limit(domain).await;
     };
@@ -71,6 +71,7 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
         }
     };
 
+
     limit_url_via(&limiter, url).await?;
     
     // // FOR LIVE RESULTS
@@ -84,7 +85,7 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
         }
     };
 
-    handle_response_logic(&response_logic, html_str, data_sender, limiter).await?;
+    handle_response_logic(&response_logic, url.clone(), html_str, data_sender, limiter).await?;
 
     Ok(())
 }
@@ -92,20 +93,20 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
 
 
 
-async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>) -> Result<(), QuickCrawlerError>
+async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, original_url: String, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>) -> Result<(), QuickCrawlerError>
 
 {
     match response_logic {
         Parallel(par_items) => {
-            use futures::stream::{self, StreamExt};
+            use futures::stream::{self, StreamExt, TryStreamExt};
             // loop over each Item in array
-            stream::iter(par_items).map(|item| (item, data_sender.clone(), html_str.clone(), limiter.clone())).for_each_concurrent(
+            let res: Result<(), QuickCrawlerError> = Box::pin(stream::iter(par_items).map(|item| (item, original_url.clone(), data_sender.clone(), html_str.clone(), limiter.clone())).map(Ok).try_for_each_concurrent(
                 /* limit */ 4,
-                |(scrape, sender, html_str, limiter)| async move {
-                    handle_scrape(&scrape.executables, html_str, sender, limiter).await;
+                |(scrape, original_url, sender, html_str, limiter)| async move {
+                    handle_scrape(&scrape.executables, original_url, html_str, sender, limiter).await
                 }
-            ).await;
-            Ok(())
+            )).await;
+            res
         }
         _ => {
             return Err(UnknownResponseLogicErr)
@@ -113,8 +114,41 @@ async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, html_str: 
     }
 }
 
+// fn get_domain_from_url(url: &str)-> Result<String, QuickCrawlerError>{
+//     let base = Url::parse(url.into()).map_err(|_| QuickCrawlerError::ParseDomainErr)?;
+//     let domain = match base.host_str() {
+//         Some(d) => format!("{}://{}", base.scheme(), d).to_string(),
+//         None => return Err(QuickCrawlerError::ParseDomainErr)
+//     };
 
+//     let domain = match base.port() {
+//         Some(p) => format!("{}:{}", domain, p).to_string(),
+//         None => domain
+//     };
+
+//     Ok(domain.to_string())
+// }
+
+fn construct_full_url(original: &str, href: &str)-> Result<String, QuickCrawlerError>{
+    // println!("domain: {:?} - href: {:?}", domain, href);
+    let res = Url::parse(href.into());
+    // println!("base {:?}", base);
+    let full_url = match res {
+        Ok(d) => href.to_string(),
+        Err(url::ParseError::RelativeUrlWithoutBase) => {
+            let base = Url::parse(original).map_err(|_| QuickCrawlerError::ParseDomainErr)?;
+            base.join(href).map_err(|_| QuickCrawlerError::ParseDomainErr)?.to_string()
+        },
+        _ => return Err(QuickCrawlerError::ParseDomainErr)
+    };
+    // println!("full_url: {:?}", full_url);
+    Ok(full_url.clone())
+}
+
+
+#[derive(Debug, Clone)]
 struct HtmlContainer {
+    original_url: String,
     html_str: String,
     url_node_strs: Vec<String>,
     data_node_strs: Vec<String>,
@@ -122,9 +156,11 @@ struct HtmlContainer {
     data_items: Vec<String>,
 }
 
+
 impl HtmlContainer{
-    fn new(html_str: String)-> HtmlContainer {
+    fn new(original_url: String, html_str: String)-> HtmlContainer {
         HtmlContainer{
+            original_url,
             html_str,
             url_node_strs: vec![],
             data_node_strs: vec![],
@@ -132,6 +168,10 @@ impl HtmlContainer{
             data_items: vec![],
             // next_: vec![],
         }
+    }
+
+    fn get_original_url(&self)-> String {
+        self.original_url.to_string()
     }
 }
 
@@ -193,11 +233,11 @@ fn find_data(ex: &ElementDataExtractor, node_strs: &Vec<String>) -> Vec<String> 
 
 
 
-fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>)-> BoxFuture<'a, Result<(), String>>
+fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, original_url: String, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>)-> BoxFuture<'a, Result<(), QuickCrawlerError>>
 {
     Box::pin(async move {
 
-        let mut container = HtmlContainer::new(html_str.clone());
+        let mut container = HtmlContainer::new(original_url.clone(), html_str.clone());
 
         for executable in executables.iter() {
             // println!("executable {:?}", i);
@@ -223,7 +263,7 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_send
 
                     // println!("ResponseLogic!");
 
-                    use futures::stream::{self, StreamExt};
+                    use futures::stream::{self, StreamExt, TryStreamExt};
                     
                     // let hrefs = container.node_urls;
                     
@@ -232,23 +272,25 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, html_str: String, data_send
                     // of Scraper crate dependency that uses Cells :(
                     // println!("{:?}", container.node_urls);
                     // let (sender, receiver) = channel::<DataFromScraperValue>(5);
-                    Box::pin(stream::iter(&container.node_urls).map(|href| (href, data_sender.clone(), response_logic.clone(), limiter.clone())).for_each_concurrent(
+                    let original_url = container.get_original_url().clone();
+                    let res: Result<(), QuickCrawlerError> = Box::pin(stream::iter(&container.node_urls).map(|href| (original_url.clone(), href.clone(), data_sender.clone(), response_logic.clone(), limiter.clone())).map(Ok).try_for_each_concurrent(
                         /* limit */ 5,
-                        |(href, data_sender, response_logic, limiter)| async move {
+                        |(original_url, href, data_sender, response_logic, limiter)| async move {
                             // println!("here {:?}", href);
-                            limit_url_via(&limiter, href).await;
-                            // // FOR LIVE RESULTS
-                            let html_str = surf::get(href).recv_string().await.map_err(|_| "Surf error".to_string()).expect("should work");
-                            // let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i, i);
+                            let full_url = construct_full_url(&original_url, &href)?;
+                            limit_url_via(&limiter, &full_url).await?;
                             
-                            handle_response_logic(&response_logic, html_str, data_sender, limiter).await;
+                            // // FOR LIVE RESULTS
+                            let html_str = surf::get(&full_url).recv_string().await.map_err(|_| QuickCrawlerError::SurfRequestErr)?;
+                            // let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i, i);
+                            handle_response_logic(&response_logic, full_url, html_str, data_sender, limiter).await
 
                             // async_std::task::yield_now().await;
+                            // Ok(())
                         }
                     )).await;
 
-
-
+                    res?;
                 }
                 Store(f)=>{
                     let res = container.data_items.iter().map(|x| x.to_string()).collect::<Vec<String>>();
