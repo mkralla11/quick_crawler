@@ -160,6 +160,13 @@
           )
           .with_limiter(
               limiter
+          )
+          // Optionally configure how to make a request and return an html string
+          .with_request_handler(
+              |config: RequestHandlerConfig| async move {
+                  // ... use any request library, like reqwest
+                  surf::get(config.url.clone()).recv_string().await.map_err(|_| QuickCrawlerError::RequestErr)
+              }
           );
       let crawler = builder.finish().map_err(|_| "Builder could not finish").expect("no error");
       

@@ -87,6 +87,8 @@
 //!       QuickCrawler, 
 //!       QuickCrawlerBuilder,
 //!       limiter::Limiter, 
+//!       RequestHandlerConfig,
+//!       QuickCrawlerError,
 //!       scrape::{
 //!           ResponseLogic::Parallel, 
 //!           StartUrl, 
@@ -158,7 +160,15 @@
 //!           )
 //!           .with_limiter(
 //!               limiter
+//!           )
+//!           // Optionally configure how to make a request and return an html string
+//!           .with_request_handler(
+//!               |config: RequestHandlerConfig| async move {
+//!                   // ... use any request library, like reqwest
+//!                   surf::get(config.url.clone()).recv_string().await.map_err(|_| QuickCrawlerError::RequestErr)
+//!               }
 //!           );
+//!
 //!       let crawler = builder.finish().map_err(|_| "Builder could not finish").expect("no error");
 //!         
 //!       // QuickCrawler is async, so choose your favorite executor.
@@ -192,7 +202,7 @@ use futures::{ready, Stream};
 use async_std::sync::{channel, Receiver, Sender};
 use async_std::task::{Context, Poll, sleep};
 
-use futures::future::{join};
+use futures::future::{join, BoxFuture};
 
 use std::time::Duration;
 
@@ -202,6 +212,7 @@ pub enum QuickCrawlerError {
     NoUrlInStartUrlErr,
     ParseDomainErr,
     SurfRequestErr,
+    RequestErr,
     NoStartUrlMethodErr,
     InvalidStartUrlMethodErr(String),
     NoResponseLogicErr,
@@ -212,7 +223,8 @@ pub enum QuickCrawlerError {
 pub struct QuickCrawler<'a>
 {
     start_urls: StreamIter<std::slice::Iter<'a, StartUrl>>,
-    limiter: Option<Arc<Limiter>>
+    limiter: Option<Arc<Limiter>>,
+    request_handler: Arc<DynRequestHandler>
 }
 
 // #[derive(Debug)]
@@ -224,7 +236,8 @@ pub struct QuickCrawler<'a>
 pub struct QuickCrawlerBuilder
 {
     start_urls: Option<Vec<StartUrl>>,
-    limiter: Option<Arc<Limiter>>
+    limiter: Option<Arc<Limiter>>,
+    request_handler: Option<Arc<DynRequestHandler>>
 }
 
 
@@ -234,7 +247,8 @@ impl QuickCrawlerBuilder
     pub fn new() -> QuickCrawlerBuilder{
         QuickCrawlerBuilder {
             start_urls: None,
-            limiter: None
+            limiter: None,
+            request_handler: None
         }
     }
 
@@ -250,16 +264,57 @@ impl QuickCrawlerBuilder
         self
     }
 
+    pub fn with_request_handler<'a>(&'a mut self, request_handler: impl RequestHandler) -> &'a mut QuickCrawlerBuilder {
+        self.request_handler = Some(Arc::new(request_handler));
+        self
+    }
 
 
     pub fn finish(&self) -> Result<QuickCrawler, QuickCrawlerError> {
         let data = self.start_urls.as_ref().ok_or(QuickCrawlerError::NoStartUrls)?;
+        
+        let request_handler = match self.request_handler.clone() {
+            Some(r) => r,
+            None => {
+                Arc::new(|config: RequestHandlerConfig| async move {
+                    // ... use any request library, like reqwest
+                    surf::get(config.url.clone()).recv_string().await.map_err(|_| QuickCrawlerError::RequestErr)
+                })
+            }
+        };
+
+
         Ok(
             QuickCrawler {
                 start_urls: stream::iter(data),
-                limiter: self.limiter.clone()
+                limiter: self.limiter.clone(),
+                request_handler: request_handler
             }
         )
+    }
+}
+
+pub struct RequestHandlerConfig {
+    pub url: String
+}
+
+
+pub trait RequestHandler: Send + Sync + 'static {
+    /// Invoke the endpoint within the given context
+    fn call<'a>(&'a self, config: RequestHandlerConfig) -> BoxFuture<'a, Result<String, QuickCrawlerError>>;
+}
+
+pub type DynRequestHandler = dyn RequestHandler;
+
+impl<F: Send + Sync + 'static, Fut> RequestHandler for F
+where
+    F: Fn(RequestHandlerConfig) -> Fut,
+    Fut: Future<Output=Result<String, QuickCrawlerError>> + Send + 'static,
+{
+    fn call<'a>(&'a self, config: RequestHandlerConfig) -> BoxFuture<'a, Result<String, QuickCrawlerError>> {
+        let fut = (self)(config);
+        Box::pin(async move { fut.await })
+        
     }
 }
 
@@ -376,7 +431,12 @@ impl Stream for DataDistributor {
 
 
 
-async fn dispatch<'a>(data_to_manager_sender: Sender<DataFromScraperValue>, start_url: &'a StartUrl, limiter: Option<Arc<Limiter>>) -> Result<(), QuickCrawlerError>
+async fn dispatch<'a>(
+    data_to_manager_sender: Sender<DataFromScraperValue>, 
+    start_url: &'a StartUrl, 
+    limiter: Option<Arc<Limiter>>, 
+    request_handler: Arc<DynRequestHandler>
+) -> Result<(), QuickCrawlerError>
 {
     // let mut count = count.lock().unwrap();
     // *count += 1;
@@ -396,7 +456,7 @@ async fn dispatch<'a>(data_to_manager_sender: Sender<DataFromScraperValue>, star
     //         count: val
     //     }
     // ).await;
-    execute_deep_scrape(&start_url, data_to_manager_sender, limiter).await?;
+    execute_deep_scrape(&start_url, data_to_manager_sender, limiter, request_handler).await?;
     // async_std::task::yield_now().await;
     // println!("in loop: {:?} {:?} {:?}", start_url.url, val, res);
 
@@ -414,12 +474,13 @@ impl<'a> QuickCrawler<'a>
         let (data_to_manager_sender, data_to_manager_receiver) = channel::<DataFromScraperValue>(100);
 
         let limiter = self.limiter;
+        let request_handler = self.request_handler;
 
-        let stream_senders_fut: Pin<Box<dyn Future<Output=Result<(), QuickCrawlerError>>>> = Box::pin(self.start_urls.map(|url| (data_to_manager_sender.clone(), url, limiter.clone())).map(Ok).try_for_each_concurrent(
+        let stream_senders_fut: Pin<Box<dyn Future<Output=Result<(), QuickCrawlerError>>>> = Box::pin(self.start_urls.map(|url| (data_to_manager_sender.clone(), url, limiter.clone(), request_handler.clone())).map(Ok).try_for_each_concurrent(
             3,
-            |(data_to_manager_sender, start_url, limiter)| async move {
+            |(data_to_manager_sender, start_url, limiter, request_handler)| async move {
                 // let i = i + 1;
-                let res = dispatch(data_to_manager_sender, start_url, limiter).await;
+                let res = dispatch(data_to_manager_sender, start_url, limiter, request_handler).await;
                 async_std::task::yield_now().await;
                 res
             }
@@ -654,7 +715,15 @@ mod tests {
             )
             .with_limiter(
                 limiter
+            )
+            .with_request_handler(
+                |config: RequestHandlerConfig| async move {
+                    // ... use any request library, like reqwest
+                    surf::get(config.url.clone()).recv_string().await.map_err(|_| QuickCrawlerError::RequestErr)
+                }
             );
+
+
         let crawler = builder.finish().map_err(|_| "Builder could not finish").expect("no error");
         let res = task::block_on(async {
             crawler.process().await

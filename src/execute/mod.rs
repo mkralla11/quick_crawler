@@ -4,6 +4,7 @@ use scraper::{Selector};
 
 use std::sync::{Arc};
 
+use crate::{DynRequestHandler, RequestHandlerConfig};
 use crate::limiter::Limiter;
 use url::Url;
 use std::future::Future;
@@ -48,7 +49,7 @@ async fn limit_url_via<S: Copy +  Into<String>>(limiter: &Option<Arc<Limiter>>, 
 
 
 
-pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>)-> Result<(), QuickCrawlerError>
+pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>, request_handler: Arc<DynRequestHandler>)-> Result<(), QuickCrawlerError>
 {
     let url = match &start_url.url {
         Some(url)=>url,
@@ -75,7 +76,8 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
     limit_url_via(&limiter, url).await?;
     
     // // FOR LIVE RESULTS
-    let html_str = req.recv_string().await.map_err(|_| SurfRequestErr)?;
+
+    let html_str = request_handler.call(RequestHandlerConfig{url: url.to_string()}).await.map_err(|_| QuickCrawlerError::RequestErr)?;
 
 
     let response_logic = match &start_url.response_logic {
@@ -85,7 +87,7 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
         }
     };
 
-    handle_response_logic(&response_logic, url.clone(), html_str, data_sender, limiter).await?;
+    handle_response_logic(&response_logic, url.clone(), html_str, data_sender, limiter, request_handler).await?;
 
     Ok(())
 }
@@ -93,17 +95,17 @@ pub async fn execute_deep_scrape<'a>(start_url: &StartUrl, data_sender: Sender<D
 
 
 
-async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, original_url: String, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>) -> Result<(), QuickCrawlerError>
+async fn handle_response_logic<'a>(response_logic: &'a ResponseLogic, original_url: String, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>, request_handler: Arc<DynRequestHandler>) -> Result<(), QuickCrawlerError>
 
 {
     match response_logic {
         Parallel(par_items) => {
             use futures::stream::{self, StreamExt, TryStreamExt};
             // loop over each Item in array
-            let res: Result<(), QuickCrawlerError> = Box::pin(stream::iter(par_items).map(|item| (item, original_url.clone(), data_sender.clone(), html_str.clone(), limiter.clone())).map(Ok).try_for_each_concurrent(
+            let res: Result<(), QuickCrawlerError> = Box::pin(stream::iter(par_items).map(|item| (item, original_url.clone(), data_sender.clone(), html_str.clone(), limiter.clone(), request_handler.clone())).map(Ok).try_for_each_concurrent(
                 /* limit */ 4,
-                |(scrape, original_url, sender, html_str, limiter)| async move {
-                    handle_scrape(&scrape.executables, original_url, html_str, sender, limiter).await
+                |(scrape, original_url, sender, html_str, limiter, request_handler)| async move {
+                    handle_scrape(&scrape.executables, original_url, html_str, sender, limiter, request_handler).await
                 }
             )).await;
             res
@@ -233,7 +235,7 @@ fn find_data(ex: &ElementDataExtractor, node_strs: &Vec<String>) -> Vec<String> 
 
 
 
-fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, original_url: String, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>)-> BoxFuture<'a, Result<(), QuickCrawlerError>>
+fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, original_url: String, html_str: String, data_sender: Sender<DataFromScraperValue>, limiter: Option<Arc<Limiter>>, request_handler: Arc<DynRequestHandler>)-> BoxFuture<'a, Result<(), QuickCrawlerError>>
 {
     Box::pin(async move {
 
@@ -273,17 +275,19 @@ fn handle_scrape<'a>(executables: &'a Vec<Box<Ops>>, original_url: String, html_
                     // println!("{:?}", container.node_urls);
                     // let (sender, receiver) = channel::<DataFromScraperValue>(5);
                     let original_url = container.get_original_url().clone();
-                    let res: Result<(), QuickCrawlerError> = Box::pin(stream::iter(&container.node_urls).map(|href| (original_url.clone(), href.clone(), data_sender.clone(), response_logic.clone(), limiter.clone())).map(Ok).try_for_each_concurrent(
+                    let res: Result<(), QuickCrawlerError> = Box::pin(stream::iter(&container.node_urls).map(|href| (original_url.clone(), href.clone(), data_sender.clone(), response_logic.clone(), limiter.clone(), request_handler.clone())).map(Ok).try_for_each_concurrent(
                         /* limit */ 5,
-                        |(original_url, href, data_sender, response_logic, limiter)| async move {
+                        |(original_url, href, data_sender, response_logic, limiter, request_handler)| async move {
                             // println!("here {:?}", href);
                             let full_url = construct_full_url(&original_url, &href)?;
                             limit_url_via(&limiter, &full_url).await?;
                             
                             // // FOR LIVE RESULTS
-                            let html_str = surf::get(&full_url).recv_string().await.map_err(|_| QuickCrawlerError::SurfRequestErr)?;
+                            let html_str = request_handler.call(RequestHandlerConfig{url: full_url.to_string()}).await.map_err(|_| QuickCrawlerError::RequestErr)?;
+                            
+                            // let html_str = surf::get(&full_url).recv_string().await.map_err(|_| QuickCrawlerError::RequestErr)?;
                             // let html_str = format!("<div class='ingredients-prep'><div class='ingredient'>{} test ingredent</div><div class='ingredient'>{} test ingredent</div><div class='prep-steps'><li>step: {}</li></div></div>", i, i, i);
-                            handle_response_logic(&response_logic, full_url, html_str, data_sender, limiter).await
+                            handle_response_logic(&response_logic, full_url, html_str, data_sender, limiter, request_handler).await
 
                             // async_std::task::yield_now().await;
                             // Ok(())
